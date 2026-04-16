@@ -16,17 +16,19 @@
 
 MODULE_big = neopostgraph
 
-OBJS = src/backend/neopostgraph.o
+OBJS = src/backend/neopostgraph.o \
+       src/backend/catalog/np_catalog.o \
+       src/backend/catalog/np_graph.o \
+	   src/backend/utils/np_cache.o
 
 EXTENSION = neopostgraph
 
 DATA = neopostgraph--0.1.0.sql
 
-REGRESS = neopostgraph
+REGRESS = graph \
+          neopostgraph
 
 srcdir=`pwd`
-POSTGIS_DIR ?= postgis_dir
-PG_LIBS += -ltree
 .PHONY:all
 
 all: neopostgraph--0.1.0.sql

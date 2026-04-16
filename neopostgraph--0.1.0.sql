@@ -15,3 +15,26 @@
 
  -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION NeoPostGraph" to load this file. \quit
+
+--
+-- catalog tables
+--
+
+--
+-- Graph Metadata
+--
+CREATE TABLE np_graph (id int NOT NULL, name name NOT NULL, namespace regnamespace NOT NULL);
+
+CREATE SEQUENCE np_graph_id_seq START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE 5;
+
+ALTER SEQUENCE np_graph_id_seq OWNED BY np_graph.id;
+
+ALTER TABLE ONLY np_graph ALTER COLUMN id SET DEFAULT nextval('np_graph_id_seq'::regclass);
+
+-- Indexes for np_graph
+CREATE UNIQUE INDEX np_graph_name_namespace_index ON np_graph USING btree (name, namespace);
+
+CREATE FUNCTION create_graph(graph_name Name, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
