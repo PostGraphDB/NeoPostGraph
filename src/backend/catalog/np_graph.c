@@ -42,9 +42,10 @@
 #include "catalog/indexing.h"
 
 #include "catalog/np_graph.h"
+#include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
-void insert_graph(const Name graph_name, const Oid namespace);
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_id_seq);
 
 PG_FUNCTION_INFO_V1(create_graph);
 Datum create_graph(PG_FUNCTION_ARGS)
@@ -58,8 +59,10 @@ Datum create_graph(PG_FUNCTION_ARGS)
                             errmsg("create_graph requires a search path when namespace is not specified")));
 
         namespace = linitial_oid(search_path);
-    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(1)), true)))
+    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(1)), true))) {
         namespace = NamespaceCreate(TextDatumGetCString(PG_GETARG_DATUM(1)), GetUserId(), false);
+        CommandCounterIncrement();
+    }
 
     // fetch the graph name
     if (PG_ARGISNULL(0))
@@ -77,26 +80,34 @@ Datum create_graph(PG_FUNCTION_ARGS)
                     errhint("Use a different graph name or create the graph in a different namespace.")
                 ));
 
-    insert_graph(PG_GETARG_NAME(0), namespace);
-    
+    int graph_id = DatumGetInt32(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(get_relname_relid("np_graph_id_seq", np_namespace_id()))));
+
+    Oid vertex_id_seq = create_vlabel_sequence(graph_id, get_namespace_name(namespace));
+
+    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_id_seq);
+    create_default_vlabel(graph_id, vertex_id_seq);
+
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
 
-// INSERT INTO postgraph.ag_graph VALUES (id, graph_name, namespace)
-void insert_graph(const Name graph_name, const Oid namespace)
+// INSERT INTO postgraph.ag_graph VALUES (id, graph_name, namespace, vertex_id_seq)
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_id_seq)
 {
     Relation rel = table_open(np_graph_relation_id(), RowExclusiveLock);
 
-    Datum values[3] = {
-        DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(get_relname_relid("np_graph_id_seq", np_namespace_id()))),
+    Datum values[4] = {
+        Int32GetDatum(graph_id),
         NameGetDatum(graph_name),
-        ObjectIdGetDatum(namespace)
+        ObjectIdGetDatum(namespace),
+        ObjectIdGetDatum(vertex_id_seq)
     };
-    bool nulls[3] = { false, false, false };
+    bool nulls[4] = { false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
     table_close(rel, RowExclusiveLock);
+
+    CommandCounterIncrement();
 }

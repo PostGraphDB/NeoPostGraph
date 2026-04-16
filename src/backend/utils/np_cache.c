@@ -242,9 +242,11 @@ static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple,
 {
     bool is_null;
     // np_graph.id
-    cache_data->oid = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
+    cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
     // np_graph.name
     namestrcpy(&cache_data->name, DatumGetName(heap_getattr(tuple, 2, tuple_desc, &is_null))->data);
     // np_graph.namespace
     cache_data->namespace = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    // np_graph.vertex_id_seq
+    cache_data->vertex_id_seq = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
 }

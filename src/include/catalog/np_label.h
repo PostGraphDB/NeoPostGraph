@@ -13,13 +13,25 @@
  * GNU General Public License for more details.
  */
 
-#ifndef NP_CATALOG_H
-#define NP_CATALOG_H
+#ifndef NP_LABEL_H
+#define NP_LABEL_H
 
 #include "postgres.h"
 
-Oid np_namespace_id(void);
+#include "utils/array.h"
 
-Oid np_relation_id(const char *name, const char *kind);
+#include "catalog/np_catalog.h"
+
+#include "ltree.h"
+
+#define CATALOG_LTREE_ROOT_LABEL "_"
+
+#define np_vertex_label_relation_id() np_relation_id("np_vertex_label", "table")
+#define np_vertex_label_graph_id_label_id() np_relation_id("np_vertex_label_graph_id_label", "index")
+
+void create_default_vlabel(int graph_id, Oid vertex_id_seq);
+void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq);
+
+Oid create_vlabel_sequence(int graph_id, char *namespace);
 
 #endif

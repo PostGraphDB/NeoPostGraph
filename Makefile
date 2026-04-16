@@ -19,28 +19,35 @@ MODULE_big = neopostgraph
 OBJS = src/backend/neopostgraph.o \
        src/backend/catalog/np_catalog.o \
        src/backend/catalog/np_graph.o \
-	   src/backend/utils/np_cache.o
+	src/backend/catalog/np_label.o \
+	src/backend/utils/np_cache.o
 
 EXTENSION = neopostgraph
 
 DATA = neopostgraph--0.1.0.sql
 
 REGRESS = graph \
+          label \
           neopostgraph
 
 srcdir=`pwd`
+PG_LIBS += -ltree
 .PHONY:all
 
 all: neopostgraph--0.1.0.sql
 
 ag_regress_dir = $(srcdir)/regress
-REGRESS_OPTS = --load-extension=neopostgraph --inputdir=$(ag_regress_dir) --outputdir=$(ag_regress_dir) --temp-instance=$(ag_regress_dir)/instance --port=58254 --encoding=UTF-8
+REGRESS_OPTS = --load-extension=btree_gist --load-extension=ltree --load-extension=neopostgraph --inputdir=$(ag_regress_dir) --outputdir=$(ag_regress_dir) --temp-instance=$(ag_regress_dir)/instance --port=58254 --encoding=UTF-8
 
 ag_regress_out = instance/ log/ results/ regression.*
 EXTRA_CLEAN = $(addprefix $(ag_regress_dir)/, $(ag_regress_out)) 
 
+LTREE_SO = $(shell $(PG_CONFIG) --pkglibdir)/ltree.so
+SHLIB_LINK = -Wl,--no-as-needed $(LTREE_SO) -Wl,--as-needed
+
 ag_include_dir = $(srcdir)/src/include
-PG_CPPFLAGS = -w -I$(ag_include_dir) 
+PG_EXT_INCLUDE = $(shell $(PG_CONFIG) --includedir-server)/extension
+PG_CPPFLAGS = -w -I$(ag_include_dir) -I$(PG_EXT_INCLUDE) -I$(PG_EXT_INCLUDE)/ltree
 
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

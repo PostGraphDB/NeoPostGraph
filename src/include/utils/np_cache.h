@@ -18,13 +18,13 @@
 
 #include "postgres.h"
 
-
 // graph_cache_data contains the same fields that ag_graph catalog table has
 typedef struct graph_cache_data
 {
-    Oid oid;
+    Oid id;
     NameData name;
     Oid namespace;
+    Oid vertex_id_seq;
 } graph_cache_data;
 
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);

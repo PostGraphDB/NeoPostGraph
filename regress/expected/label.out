@@ -1,0 +1,331 @@
+/*
+ * Copyright (C) 2026 PostGraphDB
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */ 
+LOAD 'neopostgraph';
+
+
+-- Setup the graph
+SELECT NeoPostGraph.create_graph('label_graph', 'public');
+NOTICE:  graph "label_graph" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+
+-- Standard labels
+SELECT NeoPostGraph.create_vlabel('label_graph', 'person');
+NOTICE:  graph "label_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('label_graph', 'software');
+NOTICE:  graph "label_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+
+-- Hierarchical ltree labels (assuming create_vlabel handles ltree-style strings)
+SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee');
+NOTICE:  graph "label_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee.engineer');
+NOTICE:  graph "label_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('label_graph', 'person.contractor');
+NOTICE:  graph "label_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+
+SELECT NeoPostGraph.create_graph('edge_case_graph', 'public');
+NOTICE:  graph "edge_case_graph" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+
+-- Testing the "_" naming logic
+SELECT NeoPostGraph.create_vlabel('edge_case_graph', '_internal');
+NOTICE:  graph "edge_case_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('edge_case_graph', 'test_label_123');
+NOTICE:  graph "edge_case_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+
+-- Unicode/Multi-byte labels (to match your previous tests)
+SELECT NeoPostGraph.create_vlabel('edge_case_graph', '인간'); 
+NOTICE:  graph "edge_case_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+
+SELECT NeoPostGraph.create_graph('match_test_graph', 'public');
+NOTICE:  graph "match_test_graph" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user');
+NOTICE:  graph "match_test_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_admin');
+NOTICE:  graph "match_test_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_profile');
+NOTICE:  graph "match_test_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'users'); -- Plural vs Singular
+NOTICE:  graph "match_test_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+
+-- Force the planner to use the gist index
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF)
+SELECT *
+FROM NeoPostGraph.np_vertex_label 
+WHERE graph_id = 16 
+  AND label @ 'employee & engineer';
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Index Scan using np_vertex_label_graph_id_label on np_vertex_label
+   Index Cond: ((graph_id = 16) AND (label @ 'employee & engineer'::ltxtquery))
+(2 rows)
+
+
+SELECT *
+FROM NeoPostGraph.np_vertex_label 
+WHERE graph_id = 16 
+  AND label @ 'employee & engineer';
+ id | graph_id |           label            
+----+----------+----------------------------
+  5 |       16 | _.person.employee.engineer
+(1 row)
+
+
+SELECT *
+FROM NeoPostGraph.np_vertex_label 
+WHERE graph_id = 16 
+  AND label @ 'person';
+ id | graph_id |           label            
+----+----------+----------------------------
+  2 |       16 | _.person
+  4 |       16 | _.person.employee
+  5 |       16 | _.person.employee.engineer
+  6 |       16 | _.person.contractor
+(4 rows)
+
+
+---
+-- get_vlabel_ids (uses the index from the above 3 queries)
+-- (Precursor to ltree @ 'label1 & label2 ...' operator and syntax when we start building language contructs)
+---
+-- 1. Baseline test with a single label
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['employee']::text[]);
+ get_vlabel_ids 
+----------------
+              4
+              5
+(2 rows)
+
+
+-- 2. Test multi-label AND logic
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person', 'engineer']::text[]);
+ get_vlabel_ids 
+----------------
+              5
+(1 row)
+
+
+-- 3. Test Partial match / Sub-path match
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person']::text[]);
+ get_vlabel_ids 
+----------------
+              2
+              4
+              5
+              6
+(4 rows)
+
+
+-- 4. Test non-existent label in existing graph
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['manager']::text[]);
+ get_vlabel_ids 
+----------------
+(0 rows)
+
+
+-- 5. Test existing label in non-existent graph
+SELECT NeoPostGraph.get_vlabel_ids('missing_graph', ARRAY['person']::text[]);
+ERROR:  graph "missing_graph" does not exist in namespace "public"
+
+-- 6. Test empty array input
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY[]::text[]);
+ERROR:  label array must not be empty
+
+-- 7. Test NULL label
+SELECT NeoPostGraph.get_vlabel_ids('label_graph', NULL);
+ERROR:  label array must not be NULL
+
+-- 8. Test exact match on underscores/numbers
+SELECT NeoPostGraph.get_vlabel_ids('edge_case_graph', ARRAY['test_label_123']::text[]);
+ get_vlabel_ids 
+----------------
+              3
+(1 row)
+
+
+-- 9. Test multi-byte/Unicode resolution
+SELECT NeoPostGraph.get_vlabel_ids('edge_case_graph', ARRAY['인간']::text[]);
+ get_vlabel_ids 
+----------------
+              4
+(1 row)
+
+
+
+EXPLAIN (COSTS OFF)
+SELECT *
+FROM NeoPostGraph.np_vertex_label 
+WHERE graph_id = 16 
+  AND label @ 'employee | software';
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Index Scan using np_vertex_label_graph_id_label on np_vertex_label
+   Index Cond: ((graph_id = 16) AND (label @ 'employee | software'::ltxtquery))
+(2 rows)
+
+
+SELECT *
+FROM NeoPostGraph.np_vertex_label 
+WHERE graph_id = 16 
+  AND label @ 'employee | software';
+ id | graph_id |           label            
+----+----------+----------------------------
+  3 |       16 | _.software
+  4 |       16 | _.person.employee
+  5 |       16 | _.person.employee.engineer
+(3 rows)
+
+
+-- OR logic check
+SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'software']::text[]);
+ get_or_vlabel_ids 
+-------------------
+                 3
+                 5
+(2 rows)
+
+
+SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['employee', 'software']::text[]);
+ get_or_vlabel_ids 
+-------------------
+                 3
+                 4
+                 5
+(3 rows)
+
+
+SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'contractor']::text[]);
+ get_or_vlabel_ids 
+-------------------
+                 5
+                 6
+(2 rows)
+
+
+-- OR logic check with non-existent sibling
+SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor']::text[]);
+ get_or_vlabel_ids 
+-------------------
+                 5
+(1 row)
+
+
+SELECT * FROM NeoPostGraph.np_vertex_label;
+ id | graph_id |           label            
+----+----------+----------------------------
+  1 |        1 | _
+  1 |        2 | _
+  1 |        3 | _
+  1 |        4 | _
+  1 |        5 | _
+  1 |        6 | _
+  1 |        7 | _
+  1 |        8 | _
+  1 |        9 | _
+  1 |       10 | _
+  1 |       11 | _
+  1 |       16 | _
+  2 |       16 | _.person
+  3 |       16 | _.software
+  4 |       16 | _.person.employee
+  5 |       16 | _.person.employee.engineer
+  6 |       16 | _.person.contractor
+  1 |       17 | _
+  2 |       17 | _._internal
+  3 |       17 | _.test_label_123
+  4 |       17 | _.인간
+  1 |       18 | _
+  2 |       18 | _.user
+  3 |       18 | _.user_admin
+  4 |       18 | _.user_profile
+  5 |       18 | _.users
+(26 rows)
+

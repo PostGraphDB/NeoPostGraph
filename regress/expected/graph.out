@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 PostGraphDB
+ * Copyright (C) 2026 PostGraphDB
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -14,8 +14,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */ 
--- Regression tests don't preload extensions, gotta load it first
-
 LOAD 'neopostgraph';
 
 -- Setup secondary schema
@@ -225,19 +223,19 @@ HINT:  When namespace is not specified, the graph is created in the first namesp
 --- Verification
 ---
 SELECT * FROM NeoPostGraph.np_graph;
- id |                              name                               |      namespace      
-----+-----------------------------------------------------------------+---------------------
-  1 | path_graph                                                      | other_schema
-  2 | public_graph                                                    | public
-  3 | new_graph                                                       | auto_created_schema
-  4 | a_very_long_graph_name_that_is_exactly_sixty_three_characters_l | public
-  5 | graph with spaces                                               | public
-  6 | 123_graph                                                       | public
-  7 | 존은 루저다_그래프                                              | public
-  8 | graph_🚀_fire                                                   | public
-  9 | ∑_graph_Ω                                                       | public
- 10 | conflict_test                                                   | public
- 11 | search_path_conflict                                            | public
+ id |                              name                               |      namespace      |               vertex_id_seq               
+----+-----------------------------------------------------------------+---------------------+-------------------------------------------
+  1 | path_graph                                                      | other_schema        | other_schema.vertex_label_id_seq_1
+  2 | public_graph                                                    | public              | vertex_label_id_seq_2
+  3 | new_graph                                                       | auto_created_schema | auto_created_schema.vertex_label_id_seq_3
+  4 | a_very_long_graph_name_that_is_exactly_sixty_three_characters_l | public              | vertex_label_id_seq_4
+  5 | graph with spaces                                               | public              | vertex_label_id_seq_5
+  6 | 123_graph                                                       | public              | vertex_label_id_seq_6
+  7 | 존은 루저다_그래프                                              | public              | vertex_label_id_seq_7
+  8 | graph_🚀_fire                                                   | public              | vertex_label_id_seq_8
+  9 | ∑_graph_Ω                                                       | public              | vertex_label_id_seq_9
+ 10 | conflict_test                                                   | public              | vertex_label_id_seq_10
+ 11 | search_path_conflict                                            | public              | vertex_label_id_seq_11
 (11 rows)
 
 
