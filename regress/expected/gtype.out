@@ -1,0 +1,235 @@
+/*
+ * Copyright (C) 2026 PostGraphDB
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */ 
+LOAD 'neopostgraph';
+
+-- 1. Scalar Types
+SELECT NeoPostGraph.gtype_in('42');
+ gtype_in 
+----------
+ 42
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('-9876543210');
+  gtype_in   
+-------------
+ -9876543210
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('3.14159');
+ gtype_in 
+----------
+ 3.14159
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('-0.0000001');
+ gtype_in 
+----------
+ -1e-07
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('1.23456789e10');
+  gtype_in   
+-------------
+ 12345678900
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('true');
+ gtype_in 
+----------
+ true
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('false');
+ gtype_in 
+----------
+ false
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('null');
+ gtype_in 
+----------
+ null
+(1 row)
+
+
+-- 2. Strings
+SELECT NeoPostGraph.gtype_in('"hello world"');
+   gtype_in    
+---------------
+ "hello world"
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('""');                    -- empty string
+ gtype_in 
+----------
+ ""
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('"with \"escaped\" quotes"');
+         gtype_in          
+---------------------------
+ "with \"escaped\" quotes"
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('"unicode: café, 日本語, 🚀"');
+          gtype_in           
+-----------------------------
+ "unicode: café, 日本語, 🚀"
+(1 row)
+
+
+-- 3. Objects
+SELECT NeoPostGraph.gtype_in('{}');                    -- empty map
+ gtype_in 
+----------
+ {}
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('{"name": "Alice", "age": 30}');
+           gtype_in           
+------------------------------
+ {"age": 30, "name": "Alice"}
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('{"nested": {"a": 1, "b": [2, 3]}}');
+             gtype_in              
+-----------------------------------
+ {"nested": {"a": 1, "b": [2, 3]}}
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('{"bool": true, "nullval": null, "float": 3.14}');
+                    gtype_in                    
+------------------------------------------------
+ {"bool": true, "float": 3.14, "nullval": null}
+(1 row)
+
+
+-- 4. Arrays / Lists
+SELECT NeoPostGraph.gtype_in('[]');
+ gtype_in 
+----------
+ []
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('[1, 2, 3]');
+ gtype_in  
+-----------
+ [1, 2, 3]
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('["a", "b", "c"]');
+    gtype_in     
+-----------------
+ ["a", "b", "c"]
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('[1, "mixed", 3.14, true, null]');
+            gtype_in            
+--------------------------------
+ [1, "mixed", 3.14, true, null]
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('[[1,2],[3,4]]');
+     gtype_in     
+------------------
+ [[1, 2], [3, 4]]
+(1 row)
+
+
+-- 5. Network Types
+SELECT NeoPostGraph.gtype_in('127.0.0.1');
+ gtype_in  
+-----------
+ 127.0.0.1
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('192.168.1.1/24');
+    gtype_in    
+----------------
+ 192.168.1.1/24
+(1 row)
+
+
+-- 6. Edge Cases & Special Values
+SELECT NeoPostGraph.gtype_in('0');
+ gtype_in 
+----------
+ 0
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('-0');
+ gtype_in 
+----------
+ 0
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('1e-10');
+ gtype_in 
+----------
+ 1e-10
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('NaN');
+ gtype_in 
+----------
+ NaN
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('Infinity');
+ gtype_in 
+----------
+ Infinity
+(1 row)
+
+
+-- 7. Type Cast Syntax (PostgreSQL style)
+SELECT NeoPostGraph.gtype_in('42::int');
+ gtype_in 
+----------
+ 42
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('3.14::float');
+ gtype_in 
+----------
+ 3.14
+(1 row)
+
+SELECT NeoPostGraph.gtype_in('"text"::text');
+ gtype_in 
+----------
+ "text"
+(1 row)
+
+
+-- 8. Complex Mixed Structures
+SELECT NeoPostGraph.gtype_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}');
+                                     gtype_in                                      
+-----------------------------------------------------------------------------------
+ {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}
+(1 row)
+
+
+-- 9. Error cases
+SELECT NeoPostGraph.gtype_in('invalid');
+ERROR:  invalid input syntax for type gtype
+DETAIL:  Expected gtype value, but found "invalid".
+CONTEXT:  gtype data, line 1: invalid
+SELECT NeoPostGraph.gtype_in('{broken: json}');
+ERROR:  invalid input syntax for type gtype
+DETAIL:  Expected string or "}", but found "broken".
+CONTEXT:  gtype data, line 1: {broken...
