@@ -31,7 +31,6 @@
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
-#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
 #include "utils/syscache.h"
@@ -60,8 +59,6 @@ static ScanKeyData graph_name_namespace_scan_keys[2];
 static void initialize_caches(void);
 
 // common
-static void ag_cache_scan_key_init(ScanKey entry, AttrNumber attno,
-                                   RegProcedure func);
 static int name_hash_compare(const void *key1, const void *key2, Size keysize);
 
 // np_graph

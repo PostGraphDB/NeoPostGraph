@@ -62,3 +62,40 @@ CREATE FUNCTION get_or_vlabel_ids(graph_name name, labels text[], namespace_name
 RETURNS SETOF int
 AS 'MODULE_PATHNAME', 'get_or_vlabel_ids_by_path'
 LANGUAGE C STABLE;
+
+--
+-- Type Initial Definitions
+-- 
+-- XXX: Create the shell type here so functions can reference it, then fill in the actual definition 
+-- in its dedicated section. 
+--
+
+CREATE TYPE gtype;
+
+--
+-- gtype datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION gtype_in(cstring) RETURNS gtype
+LANGUAGE C
+IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION gtype_out(gtype) RETURNS cstring
+LANGUAGE C
+IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE gtype (
+    INPUT = gtype_in,
+    OUTPUT = gtype_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);

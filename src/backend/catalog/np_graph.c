@@ -18,22 +18,12 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/xact.h"
-#include "catalog/dependency.h"
 #include "catalog/namespace.h"
-#include "catalog/objectaddress.h"
 #include "catalog/pg_namespace.h"
-#include "commands/defrem.h"
-#include "commands/schemacmds.h"
-#include "commands/sequence.h"
-#include "commands/tablecmds.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "nodes/makefuncs.h"
 #include "nodes/nodes.h"
-#include "nodes/parsenodes.h"
 #include "nodes/pg_list.h"
-#include "nodes/value.h"
-#include "parser/parser.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
 #include "utils/builtins.h"
@@ -45,7 +35,7 @@
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_id_seq);
+void insert_graph(Name graph_name, Oid namespace, int graph_id, Oid vertex_id_seq);
 
 PG_FUNCTION_INFO_V1(create_graph);
 Datum create_graph(PG_FUNCTION_ARGS)

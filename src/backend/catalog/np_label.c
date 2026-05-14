@@ -37,14 +37,11 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
-#include "tsearch/ts_utils.h"
 
 #include "parser/parse_type.h"
-#include "catalog/pg_type.h"
 
 #include "ltree.h"
 
-#include "catalog/np_graph.h"
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
