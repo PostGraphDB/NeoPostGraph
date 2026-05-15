@@ -144,6 +144,7 @@ CREATE TABLE np_graph (
     id int NOT NULL,
     name name NOT NULL,
     namespace regnamespace NOT NULL,
+    vertex_labels regclass NOT NULL,
     vertex_id_seq regclass NOT NULL
 );
 
@@ -160,15 +161,6 @@ CREATE FUNCTION create_graph(graph_name Name, namespace text DEFAULT NULL)
 RETURNS void 
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
-
---
--- Vertex Label Metadata
---
-CREATE TABLE np_vertex_label (id int NOT NULL, graph_id int NOT NULL, label public.ltree NOT NULL, dictionary_id_seq regclass NOT NULL);
-
--- Indexes for np_vertex_label
-CREATE UNIQUE INDEX np_vertex_label_graph_id_id_index ON np_vertex_label USING btree (graph_id, id);
-CREATE INDEX np_vertex_label_graph_id_label ON np_vertex_label USING GIST (graph_id, label public.gist_ltree_ops);
 
 CREATE FUNCTION create_vlabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
 RETURNS void 
@@ -188,7 +180,7 @@ LANGUAGE C STABLE;
 --
 -- Dictionary Properties Metadata
 --
-CREATE TABLE np_vertex_property_dictionaries(graph_id int , label_id int, dictionary_id smallint, dict dictionary);
+CREATE TABLE np_vertex_property_dictionaries(graph_id int, label_id int, dictionary_id smallint, dict dictionary);
 
 CREATE UNIQUE INDEX np_property_dictionaries_graph_label_dictionary_index
 ON np_vertex_property_dictionaries

@@ -19,7 +19,6 @@
 #include "access/htup.h"
 #include "access/htup_details.h"
 #include "access/skey.h"
-#include "access/stratnum.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
@@ -33,23 +32,31 @@
 #include "storage/lockdefs.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
-
+#include "utils/syscache.h"
+#include "tcop/utility.h"
 #include "parser/parse_type.h"
 
 #include "ltree.h"
 
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
+#include "utils/dictionary.h"
+
+#define LTREEOID \
+(GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("ltree"), ObjectIdGetDatum(public_catalog_namespace_id())))
+
+
 
 #define CATALOG_LTREE_ROOT_LABEL "_"
 
-void insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq);
+
+int insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq);
 Datum text_array_to_lxtquery(ArrayType *label_array);
 Datum text_array_to_lxtquery_or(ArrayType *label_array);
+
 
 PG_FUNCTION_INFO_V1(ltree_in);
 PG_FUNCTION_INFO_V1(ltree_addltree);
@@ -57,7 +64,9 @@ PG_FUNCTION_INFO_V1(ltxtq_in);
 
 void create_default_vlabel(int graph_id, Oid vertex_id_seq)
 {
-    insert_vlabel(graph_id, DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), vertex_id_seq);
+    int label_id = insert_vlabel(graph_id, DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), vertex_id_seq);
+
+    create_vertex_property_dictionary(graph_id, label_id);
 }
 
 
@@ -101,7 +110,7 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
                 ));
 
 
-    insert_vlabel(
+    int label_id = insert_vlabel(
         entry->id,
         DirectFunctionCall2(ltree_addltree,
             DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
@@ -109,11 +118,11 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
         ),
         entry->vertex_id_seq);
 
+    create_vertex_property_dictionary(entry->id, label_id);
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
-
 
 void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq)
 {
@@ -141,47 +150,26 @@ Oid create_vlabel_sequence(int graph_id, char *namespace)
     return get_relname_relid(seq_name, get_namespace_oid(namespace, false));
 }
 
-Oid create_dictionary_id_sequence(int graph_id, int label_id)
+
+int insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq)
 {
-    ParseState *pstate = make_parsestate(NULL);
-    pstate->p_sourcetext = "(generated CREATE SEQUENCE command)";
-
-    char *seq_name = psprintf("dictionary_seq_%d_%d", graph_id, label_id);
-
-    CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
-    seq_stmt->sequence = makeRangeVar("neopostgraph", seq_name, -1);
-    seq_stmt->options = NIL;
-    seq_stmt->ownerId = InvalidOid;
-    seq_stmt->for_identity = false;
-    seq_stmt->if_not_exists = false;
-
-    DefineSequence(pstate, seq_stmt);
-
-    CommandCounterIncrement();
-
-    return get_relname_relid(seq_name, get_namespace_oid("neopostgraph", false));
-}
-
-void insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq)
-{
-    Relation rel = table_open(np_vertex_label_relation_id(), RowExclusiveLock);
+    Relation rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", graph_id), "table"), RowExclusiveLock);
 
     Datum label_id = DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq));
-    Datum values[4] = {
+    Datum values[2] = {
         label_id,
-        Int32GetDatum(graph_id),
-        label,
-        ObjectIdGetDatum(create_dictionary_id_sequence(graph_id, DatumGetInt32(label_id)))
+        label
     };
-    bool nulls[4] = { false, false, false, false };
+    bool nulls[2] = { false, false};//, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
     table_close(rel, RowExclusiveLock);
 
     CommandCounterIncrement();
-}
 
+    return DatumGetInt32(label_id);
+}
 
 typedef struct {
     SysScanDesc scan;
@@ -234,17 +222,17 @@ get_vlabel_ids_by_path(PG_FUNCTION_ARGS)
         if (PG_ARGISNULL(1))
             ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label array must not be NULL")));
 
-        Relation rel = table_open(np_vertex_label_relation_id(), AccessShareLock);
+        Relation rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", cache_entry->id), "table"), AccessShareLock);
 
-        ScanKeyData skey[2];
-        ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(cache_entry->id));
-        ScanKeyInit(&skey[1], 3, 14,
+        ScanKeyData skey[1];
+       // ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(cache_entry->id));
+        ScanKeyInit(&skey[0], 2, 14,
             DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
             text_array_to_lxtquery(PG_GETARG_ARRAYTYPE_P(1))
         ); 
 
 
-        SysScanDesc scan = systable_beginscan(rel, np_vertex_label_graph_id_label_id(), true, NULL, 2, skey);
+        SysScanDesc scan = systable_beginscan(rel, np_relation_id(psprintf("np_vertex_label_graph_id_label_%d", cache_entry->id), "index"), true, NULL, 1, skey);
 
         GetVLabelContext *fctx = palloc(sizeof(GetVLabelContext));
         fctx->scan = scan;
@@ -311,8 +299,6 @@ text_array_to_lxtquery(ArrayType *label_array)
     return result;
 }
 
-
-
 PG_FUNCTION_INFO_V1(get_or_vlabel_ids_by_path);
 Datum
 get_or_vlabel_ids_by_path(PG_FUNCTION_ARGS)
@@ -359,17 +345,16 @@ get_or_vlabel_ids_by_path(PG_FUNCTION_ARGS)
         if (PG_ARGISNULL(1))
             ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label array must not be NULL")));
 
-        Relation rel = table_open(np_vertex_label_relation_id(), AccessShareLock);
+        Relation rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", cache_entry->id), "table"), AccessShareLock);
 
-        ScanKeyData skey[2];
-        ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(cache_entry->id));
-        ScanKeyInit(&skey[1], 3, 14,
+        ScanKeyData skey[1];
+        //ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(cache_entry->id));
+        ScanKeyInit(&skey[0], 2, 14,
             DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
             text_array_to_lxtquery_or(PG_GETARG_ARRAYTYPE_P(1))
-        ); 
+        );
 
-
-        SysScanDesc scan = systable_beginscan(rel, np_vertex_label_graph_id_label_id(), true, NULL, 2, skey);
+        SysScanDesc scan = systable_beginscan(rel, np_relation_id(psprintf("np_vertex_label_graph_id_label_%d", cache_entry->id), "index"), true, NULL, 1, skey);
 
         GetVLabelContext *fctx = palloc(sizeof(GetVLabelContext));
         fctx->scan = scan;
@@ -435,4 +420,129 @@ text_array_to_lxtquery_or(ArrayType *label_array)
     pfree(nulls);
 
     return result;
+}
+
+Oid create_vertex_label_metadata_table(int graph_id)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_label_%d", graph_id), -1);
+
+    ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
+    ltree->constraints = list_make1(build_not_null_constraint());
+
+    create_stmt->tableElts = list_make2(id, ltree);
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+    // CommandCounterIncrement() is called in ProcessUtility()
+    return get_relname_relid(psprintf("np_vertex_label_%d", graph_id), get_namespace_oid("neopostgraph", false));
+}
+
+void create_vertex_label_metadata_btree_index(int graph_id)
+{
+    IndexStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(IndexStmt);
+
+    create_stmt->idxname = psprintf("np_vertex_label_graph_id_id_index_%d", graph_id);
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_label_%d", graph_id), -1);
+
+    IndexElem *id = makeNode(IndexElem);
+    id->name = "id";
+
+    create_stmt->accessMethod = "btree";
+    create_stmt->tableSpace = NULL;
+    create_stmt->indexParams = list_make1(id);
+    create_stmt->indexIncludingParams = NIL;
+    create_stmt->options = NIL;
+    create_stmt->whereClause = NULL;
+    create_stmt->excludeOpNames = NIL;
+    create_stmt->idxcomment = "primary index for autogenerated label metadata table";
+    create_stmt->indexOid = InvalidOid;
+
+    create_stmt->unique = true;
+    create_stmt->primary = true;
+    create_stmt->isconstraint = true;
+    create_stmt->concurrent = false; // Index and Table start empty
+    create_stmt->deferrable = false;
+    create_stmt->initdeferred = false;
+    create_stmt->if_not_exists = false;
+    create_stmt->reset_default_tblspc = false;
+
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
+}
+
+void create_vertex_label_metadata_gist_index(int graph_id)
+{
+    IndexStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(IndexStmt);
+
+    create_stmt->idxname = psprintf("np_vertex_label_graph_id_label_%d", graph_id);
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_label_%d", graph_id), -1);
+
+    IndexElem *ltree = makeNode(IndexElem);
+    ltree->name = "ltree";
+
+    create_stmt->accessMethod = "gist";
+    create_stmt->tableSpace = NULL;
+    create_stmt->indexParams = list_make1(ltree);
+    create_stmt->indexIncludingParams = NIL;
+    create_stmt->options = NIL;
+    create_stmt->whereClause = NULL;
+    create_stmt->excludeOpNames = NIL;
+    create_stmt->idxcomment = "label gist index for autogenerated label metadata table";
+    create_stmt->indexOid = InvalidOid;
+
+    create_stmt->unique = false;
+    create_stmt->primary = false;
+    create_stmt->isconstraint = false;
+    create_stmt->concurrent = false; // Index and Table start empty
+    create_stmt->deferrable = false;
+    create_stmt->initdeferred = false;
+    create_stmt->if_not_exists = false;
+    create_stmt->reset_default_tblspc = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
 }

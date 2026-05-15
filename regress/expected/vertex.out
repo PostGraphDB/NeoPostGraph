@@ -115,12 +115,24 @@ NOTICE:  graph "vertex_graph" has been created
 (1 row)
 
 
+SELECT * FROM NeoPostGraph.np_graph graph WHERE graph.name = 'vertex_graph';
+ id |     name     | namespace |          vertex_labels          |     vertex_id_seq      
+----+--------------+-----------+---------------------------------+------------------------
+ 21 | vertex_graph | public    | neopostgraph.np_vertex_label_21 | vertex_label_id_seq_21
+(1 row)
+
+select * FROM NeoPostGraph.np_vertex_label_21;
+ id |  ltree   
+----+----------
+  1 | _
+  2 | _.person
+(2 rows)
+
+
 SELECT NeoPostGraph.vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label label
-JOIN NeoPostGraph.np_graph graph
-ON label.graph_id = graph.id
+FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
 WHERE graph.name = 'vertex_graph'
-  AND label @ 'person';
+  AND label.ltree @ 'person';
                                vertex_build                               
 --------------------------------------------------------------------------
  {"id": 0, "label": "person", "properties": {"age": 30, "name": "Alice"}}
@@ -136,11 +148,9 @@ NOTICE:  graph "vertex_graph" has been created
 
 
 SELECT NeoPostGraph.vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label label
-         JOIN NeoPostGraph.np_graph graph
-              ON label.graph_id = graph.id
+FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
 WHERE graph.name = 'vertex_graph'
-  AND label @ 'person';
+  AND label.ltree @ 'person';
                                         vertex_build                                        
 --------------------------------------------------------------------------------------------
  {"id": 1, "label": "person", "properties": {"age": 30, "name": "Alice"}}

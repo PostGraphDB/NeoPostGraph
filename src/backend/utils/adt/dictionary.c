@@ -28,8 +28,26 @@
 #include "utils/gtype.h"
 #include "utils/dictionary.h"
 
-#include "../../../../../postgres/include/server/fmgr.h"
-#include "../../../include/utils/gtype.h"
+#include "access/heapam.h"
+#include "access/htup.h"
+#include "access/htup_details.h"
+#include "access/skey.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_type.h"
+#include "commands/sequence.h"
+#include "lib/stringinfo.h"
+#include "nodes/execnodes.h"
+#include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
+#include "storage/lockdefs.h"
+#include "utils/array.h"
+#include "utils/lsyscache.h"
+#include "utils/rel.h"
+#include "utils/relcache.h"
+#include "utils/syscache.h"
+#include "tcop/utility.h"
+#include "parser/parse_type.h"
 
 PG_FUNCTION_INFO_V1(dictionary_in);
 Datum dictionary_in(PG_FUNCTION_ARGS) {
@@ -77,4 +95,38 @@ Datum dictionary_out(PG_FUNCTION_ARGS) {
     appendStringInfoString(out, "}");
 
     PG_RETURN_CSTRING(gtype_to_cstring(out, &dict->array, 0));
+}
+
+
+void create_vertex_property_dictionary(int graph_id, int label_id) {
+    CreateStmt *create_stmt = makeNode(CreateStmt);;
+
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_property_dictionary_%d_%d", graph_id, label_id), -1);
+
+    ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *dict = makeColumnDef("dict", DICTIONARYOID, -1, InvalidOid);
+    dict->constraints = list_make1(build_not_null_constraint());
+
+    create_stmt->tableElts = list_make2(id, dict);
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    PlannedStmt *wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+    // CommandCounterIncrement() is called in ProcessUtility()
 }

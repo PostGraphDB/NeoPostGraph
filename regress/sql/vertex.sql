@@ -40,18 +40,17 @@ SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "t
 SELECT NeoPostGraph.create_graph('vertex_graph', 'public');
 SELECT NeoPostGraph.create_vlabel('vertex_graph', 'person');
 
+SELECT * FROM NeoPostGraph.np_graph graph WHERE graph.name = 'vertex_graph';
+select * FROM NeoPostGraph.np_vertex_label_21;
+
 SELECT NeoPostGraph.vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label label
-JOIN NeoPostGraph.np_graph graph
-ON label.graph_id = graph.id
+FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
 WHERE graph.name = 'vertex_graph'
-  AND label @ 'person';
+  AND label.ltree @ 'person';
 
 SELECT NeoPostGraph.create_vlabel('vertex_graph', 'person.employee.engineer');
 
 SELECT NeoPostGraph.vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label label
-         JOIN NeoPostGraph.np_graph graph
-              ON label.graph_id = graph.id
+FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
 WHERE graph.name = 'vertex_graph'
-  AND label @ 'person';
+  AND label.ltree @ 'person';

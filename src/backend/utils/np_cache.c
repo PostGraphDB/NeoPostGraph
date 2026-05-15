@@ -71,7 +71,7 @@ typedef struct vertex_label_graph_id_id_cache_entry
 
 // np_graph.name
 static HTAB *vertex_label_graph_id_id_cache_hash = NULL;
-static ScanKeyData vertex_label_graph_id_id_scan_keys[2];
+static ScanKeyData vertex_label_scan_keys[1];
 
 
 // initialize all caches
@@ -171,8 +171,7 @@ static void initialize_graph_caches(void)
 
 static void initialize_label_caches(void)
 {
-    np_cache_scan_key_init(&vertex_label_graph_id_id_scan_keys[0], 2, F_OIDEQ);
-    np_cache_scan_key_init(&vertex_label_graph_id_id_scan_keys[1], 1, F_OIDEQ);
+    np_cache_scan_key_init(&vertex_label_scan_keys[0], 1, F_OIDEQ);
 
     create_label_caches();
 
@@ -346,8 +345,10 @@ static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple,
     namestrcpy(&cache_data->name, DatumGetName(heap_getattr(tuple, 2, tuple_desc, &is_null))->data);
     // np_graph.namespace
     cache_data->namespace = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    // np_graph.vertex_labels
+    cache_data->vertex_labels = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
     // np_graph.vertex_id_seq
-    cache_data->vertex_id_seq = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
+    cache_data->vertex_id_seq = DatumGetObjectId(heap_getattr(tuple, 5, tuple_desc, &is_null));
 }
 
 const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id)
@@ -366,14 +367,13 @@ const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int g
 static vertex_label_cache_data *search_label_graph_id_label_id_cache_miss(graph_id_label_id_cache_key *key)
 {
     // setup scan keys
-    ScanKeyData scan_keys[2];
-    memcpy(scan_keys, vertex_label_graph_id_id_scan_keys, sizeof(vertex_label_graph_id_id_scan_keys));
-    scan_keys[0].sk_argument = ObjectIdGetDatum(key->graph_id);
-    scan_keys[1].sk_argument = ObjectIdGetDatum(key->label_id);
+    ScanKeyData scan_keys[1];
+    memcpy(scan_keys, vertex_label_scan_keys, sizeof(vertex_label_scan_keys));
+    scan_keys[0].sk_argument = ObjectIdGetDatum(key->label_id);
 
     // open graph catalog
-    Relation np_graph = table_open(np_vertex_label_relation_id(), AccessShareLock);
-    SysScanDesc scan_desc = systable_beginscan(np_graph, np_vertex_label_graph_id_id_index(), true, NULL, 2, scan_keys);
+    Relation np_graph = table_open(np_relation_id(psprintf("np_vertex_label_%d", key->graph_id), "table"), AccessShareLock);
+    SysScanDesc scan_desc = systable_beginscan(np_graph, np_relation_id(psprintf("np_vertex_label_graph_id_id_index_%d", key->graph_id), "index"), true, NULL, 1, scan_keys);
 
     // get catalog record
     // don't need to loop over scan_desc because np_graph_name_namespace_index is UNIQUE
@@ -403,7 +403,5 @@ static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple
 {
     bool is_null;
     cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
-    cache_data->graph_id = DatumGetObjectId(heap_getattr(tuple, 2, tuple_desc, &is_null));
-    cache_data->label = DatumGetLtreePCopy(heap_getattr(tuple, 3, tuple_desc, &is_null));
-    cache_data->dictionary_id_seq = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
+    cache_data->label = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
 }

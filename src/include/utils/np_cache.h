@@ -26,6 +26,7 @@ typedef struct graph_cache_data
     Oid id;
     NameData name;
     Oid namespace;
+    Oid vertex_labels;
     Oid vertex_id_seq;
 } graph_cache_data;
 
@@ -34,7 +35,6 @@ typedef struct vertex_label_cache_data
     int id;
     int graph_id;
     ltree *label;
-    Oid dictionary_id_seq;
 } vertex_label_cache_data;
 
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);

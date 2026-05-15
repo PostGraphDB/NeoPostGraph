@@ -18,16 +18,22 @@
 #define NP_DICTIONARY_H
 
 #include "gtype.h"
+#include "catalog/np_catalog.h"
 
 #define DATUM_GET_DICTIONARY(d) ((dictionary *)PG_DETOAST_DATUM(d))
 #define DICTIONARY_GET_DATUM(p) PointerGetDatum(p)
 #define NP_GET_ARG_DICTIONARY(x) DATUM_GET_DICTIONARY(PG_GETARG_DATUM(x))
 #define NP_RETURN_DICTIONARY(x) PG_RETURN_POINTER(x)
 
+#define DICTIONARYOID \
+(GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("dictionary"), ObjectIdGetDatum(neopostgraph_catalog_namespace_id())))
+
 typedef struct {
     uint32 vl_len_;
     uint64 dictionary_id;
     gtype_container array;
 } dictionary;
+
+void create_vertex_property_dictionary(int graph_id, int label_id);
 
 #endif
