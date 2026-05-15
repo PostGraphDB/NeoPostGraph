@@ -82,6 +82,28 @@ static Datum gtype_from_cstring(char *str, int len)
     return GTYPE_P_GET_DATUM(gtype_value_to_gtype(state.res));
 }
 
+gtype_value *gtype_value_from_cstring(char *str, int len)
+{
+    gtype_lex_context *lex = make_gtype_lex_context_cstring_len(str, len, true);
+
+    gtype_in_state state;
+    gtype_sem_action sem;
+    memset(&state, 0, sizeof(state));
+    memset(&sem, 0, sizeof(sem));
+
+    sem.semstate = (void *)&state;
+    sem.object_start = gtype_in_object_start;
+    sem.array_start = gtype_in_array_start;
+    sem.object_end = gtype_in_object_end;
+    sem.array_end = gtype_in_array_end;
+    sem.scalar = gtype_in_scalar;
+    sem.object_field_start = gtype_in_object_field_start;
+
+    parse_gtype(lex, &sem);
+
+    return state.res;
+}
+
 static size_t check_string_length(const size_t len) {
     if (len > GTENTRY_OFFLENMASK)
         ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED), errmsg("string too long to represent as gtype string"),

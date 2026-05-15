@@ -20,20 +20,14 @@
 #ifndef NP_GTYPE_H
 #define NP_GTYPE_H
 
-#include "access/htup_details.h"
 #include "c.h"
 #include "datatype/timestamp.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
-#include "nodes/pg_list.h"
-#include "tsearch/ts_type.h"
 #include "utils/array.h"
 #include "utils/date.h"
 #include "utils/inet.h"
-#include "utils/geo_decls.h"
-#include "utils/multirangetypes.h"
 #include "utils/numeric.h"
-#include "utils/rangetypes.h"
 #include "utils/syscache.h"
 #include "catalog/pg_type.h"
 
@@ -284,7 +278,7 @@ gtype_iterator_token gtype_iterator_next(gtype_iterator **it, gtype_value *val, 
 gtype *gtype_value_to_gtype(gtype_value *val);
 
 char *gtype_to_cstring(StringInfo out, gtype_container *in, int estimated_len);
-
+gtype_value *gtype_value_from_cstring(char *str, int len);
 
 #define GTYPEOID \
     (GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("gtype"), ObjectIdGetDatum(postgraph_namespace_id())))

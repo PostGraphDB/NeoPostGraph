@@ -27,6 +27,7 @@
 #define CATALOG_LTREE_ROOT_LABEL "_"
 
 #define np_vertex_label_relation_id() np_relation_id("np_vertex_label", "table")
+#define np_vertex_label_graph_id_id_index() np_relation_id("np_vertex_label_graph_id_id_index", "index")
 #define np_vertex_label_graph_id_label_id() np_relation_id("np_vertex_label_graph_id_label", "index")
 
 void create_default_vlabel(int graph_id, Oid vertex_id_seq);

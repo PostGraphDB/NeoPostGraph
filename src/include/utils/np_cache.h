@@ -18,6 +18,8 @@
 
 #include "postgres.h"
 
+#include "ltree.h"
+
 // graph_cache_data contains the same fields that ag_graph catalog table has
 typedef struct graph_cache_data
 {
@@ -27,6 +29,14 @@ typedef struct graph_cache_data
     Oid vertex_id_seq;
 } graph_cache_data;
 
-const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);
+typedef struct vertex_label_cache_data
+{
+    int id;
+    int graph_id;
+    ltree *label;
+    Oid dictionary_id_seq;
+} vertex_label_cache_data;
 
+const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);
+const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id);
 #endif

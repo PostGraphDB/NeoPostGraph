@@ -16,6 +16,123 @@
  -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION NeoPostGraph" to load this file. \quit
 
+                                                             --
+-- Type Initial Definitions
+--
+-- XXX: Create the shell type here so functions can reference it, then fill in the actual definition
+-- in its dedicated section.
+--
+CREATE TYPE gtype;
+CREATE TYPE dictionary;
+CREATE TYPE vertex;
+--
+-- gtype datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION gtype_in(cstring) RETURNS gtype
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION gtype_out(gtype) RETURNS cstring
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE gtype (
+    INPUT = gtype_in,
+    OUTPUT = gtype_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);
+
+--
+-- dictionary datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION dictionary_in(cstring) RETURNS dictionary
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION dictionary_out(dictionary) RETURNS cstring
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE dictionary (
+    INPUT = dictionary_in,
+    OUTPUT = dictionary_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);
+
+--
+-- dictionary constructors
+--
+
+CREATE FUNCTION dictionary_build(smallint, gtype)
+RETURNS dictionary
+LANGUAGE C
+IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+
+--
+-- vertex datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION vertex_in(cstring) RETURNS vertex
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION vertex_out(vertex) RETURNS cstring
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE vertex (
+    INPUT = vertex_in,
+    OUTPUT = vertex_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);
+
+--
+-- Constructor Functions
+--
+CREATE FUNCTION vertex_build(int8, int, int, smallint, gtype)
+RETURNS vertex
+LANGUAGE C
+IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
 --
 -- catalog tables
 --
@@ -23,7 +140,12 @@
 --
 -- Graph Metadata
 --
-CREATE TABLE np_graph (id int NOT NULL, name name NOT NULL, namespace regnamespace NOT NULL, vertex_id_seq regclass NOT NULL);
+CREATE TABLE np_graph (
+    id int NOT NULL,
+    name name NOT NULL,
+    namespace regnamespace NOT NULL,
+    vertex_id_seq regclass NOT NULL
+);
 
 CREATE SEQUENCE np_graph_id_seq START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE 5;
 
@@ -42,7 +164,7 @@ AS 'MODULE_PATHNAME';
 --
 -- Vertex Label Metadata
 --
-CREATE TABLE np_vertex_label (id int NOT NULL, graph_id int NOT NULL, label public.ltree NOT NULL);
+CREATE TABLE np_vertex_label (id int NOT NULL, graph_id int NOT NULL, label public.ltree NOT NULL, dictionary_id_seq regclass NOT NULL);
 
 -- Indexes for np_vertex_label
 CREATE UNIQUE INDEX np_vertex_label_graph_id_id_index ON np_vertex_label USING btree (graph_id, id);
@@ -64,38 +186,10 @@ AS 'MODULE_PATHNAME', 'get_or_vlabel_ids_by_path'
 LANGUAGE C STABLE;
 
 --
--- Type Initial Definitions
--- 
--- XXX: Create the shell type here so functions can reference it, then fill in the actual definition 
--- in its dedicated section. 
+-- Dictionary Properties Metadata
 --
+CREATE TABLE np_vertex_property_dictionaries(graph_id int , label_id int, dictionary_id smallint, dict dictionary);
 
-CREATE TYPE gtype;
-
---
--- gtype datatype
---
-
---
--- I/O Routines
---
-CREATE FUNCTION gtype_in(cstring) RETURNS gtype
-LANGUAGE C
-IMMUTABLE
-RETURNS NULL ON NULL INPUT
-PARALLEL SAFE
-AS 'MODULE_PATHNAME';
-
-CREATE FUNCTION gtype_out(gtype) RETURNS cstring
-LANGUAGE C
-IMMUTABLE
-RETURNS NULL ON NULL INPUT
-PARALLEL SAFE
-AS 'MODULE_PATHNAME';
-
-CREATE TYPE gtype (
-    INPUT = gtype_in,
-    OUTPUT = gtype_out,
-    LIKE = jsonb,
-    STORAGE = extended
-);
+CREATE UNIQUE INDEX np_property_dictionaries_graph_label_dictionary_index
+ON np_vertex_property_dictionaries
+USING btree (graph_id, label_id, dictionary_id);

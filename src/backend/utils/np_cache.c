@@ -35,15 +35,17 @@
 #include "utils/relcache.h"
 #include "utils/syscache.h"
 
+#include "ltree.h"
+
 #include "catalog/np_graph.h"
 #include "utils/np_cache.h"
+#include "catalog/np_label.h"
 
 typedef struct graph_name_namespace_cache_key
 {
     NameData name; // np_graph.name
     Oid namespace; // np_graph.namespace
 } graph_name_namespace_cache_key;
-
 
 typedef struct graph_name_namespace_cache_entry
 {
@@ -55,11 +57,29 @@ typedef struct graph_name_namespace_cache_entry
 static HTAB *graph_name_namespace_cache_hash = NULL;
 static ScanKeyData graph_name_namespace_scan_keys[2];
 
+typedef struct graph_id_label_id_cache_key
+{
+    int graph_id;
+    int label_id;
+} graph_id_label_id_cache_key;
+
+typedef struct vertex_label_graph_id_id_cache_entry
+{
+    graph_id_label_id_cache_key key;
+    vertex_label_cache_data data;
+} vertex_label_graph_id_id_cache_entry;
+
+// np_graph.name
+static HTAB *vertex_label_graph_id_id_cache_hash = NULL;
+static ScanKeyData vertex_label_graph_id_id_scan_keys[2];
+
+
 // initialize all caches
 static void initialize_caches(void);
 
 // common
 static int name_hash_compare(const void *key1, const void *key2, Size keysize);
+static int graph_id_label_id_hash_compare(const void *key1, const void *key2, Size keysize);
 
 // np_graph
 static void initialize_graph_caches(void);
@@ -69,6 +89,15 @@ static void invalidate_graph_caches(Datum arg, int cache_id, uint32 hash_value);
 static void flush_graph_name_namespace_cache(void);
 static graph_cache_data *search_graph_name_namespace_cache_miss(graph_name_namespace_cache_key *key);
 static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
+
+// np_vertex_label
+static void initialize_label_caches(void);
+static void create_label_caches(void);
+static void create_label_graph_id_label_id_cache(void);
+static void invalidate_label_caches(Datum arg, int cache_id, uint32 hash_value);
+static void flush_label_graph_id_label_id_cache(void);
+static vertex_label_cache_data *search_label_graph_id_label_id_cache_miss(graph_id_label_id_cache_key *key);
+static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
 
 static void initialize_caches(void)
 {
@@ -81,6 +110,7 @@ static void initialize_caches(void)
         CreateCacheMemoryContext();
 
     initialize_graph_caches();
+    initialize_label_caches();
 
     initialized = true;
 }
@@ -110,6 +140,19 @@ static int name_hash_compare(const void *key1, const void *key2, Size keysize)
     return strncmp(NameStr(cache_key1->name), NameStr(cache_key2->name), NAMEDATALEN);
 }
 
+static int graph_id_label_id_hash_compare(const void *key1, const void *key2, Size keysize) {
+    graph_id_label_id_cache_key *cache_key1 = (graph_id_label_id_cache_key *)key1;
+    graph_id_label_id_cache_key *cache_key2 = (graph_id_label_id_cache_key *)key2;
+
+
+    if (cache_key1->graph_id < cache_key2->graph_id)
+        return -1;
+    else if (cache_key1->graph_id > cache_key2->graph_id)
+        return 1;
+
+    return cache_key1->label_id < cache_key2->label_id ? -1 : cache_key1->label_id > cache_key2->label_id ? 1: 0;
+}
+
 static void initialize_graph_caches(void)
 {
     // np_graph.name
@@ -126,6 +169,20 @@ static void initialize_graph_caches(void)
     CacheRegisterSyscacheCallback(NAMESPACEOID, invalidate_graph_caches, (Datum)0);
 }
 
+static void initialize_label_caches(void)
+{
+    np_cache_scan_key_init(&vertex_label_graph_id_id_scan_keys[0], 2, F_OIDEQ);
+    np_cache_scan_key_init(&vertex_label_graph_id_id_scan_keys[1], 1, F_OIDEQ);
+
+    create_label_caches();
+
+    /*
+     * A label is backed by the bound namespace. So, register the invalidation
+     * logic of the label caches for invalidation events of NAMESPACEOID cache.
+     */
+    CacheRegisterSyscacheCallback(NAMESPACEOID, invalidate_label_caches, (Datum)0);
+}
+
 static void create_graph_caches(void)
 {
     /*
@@ -135,6 +192,18 @@ static void create_graph_caches(void)
      * XXX: Setup to handle multiple caches
      */
     create_graph_name_namespace_cache();
+
+}
+
+static void create_label_caches(void)
+{
+    /*
+     * All the hash tables are created using their dedicated memory contexts
+     * which are under TopMemoryContext.
+     *
+     * XXX: Setup to handle multiple caches
+     */
+    create_label_graph_id_label_id_cache();
 
 }
 
@@ -155,18 +224,35 @@ static void create_graph_name_namespace_cache(void)
 			     HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
 }
 
+static void create_label_graph_id_label_id_cache(void)
+{
+    HASHCTL hash_ctl;
+
+    MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize = sizeof(NameData);
+    hash_ctl.entrysize = sizeof(graph_name_namespace_cache_entry);
+    hash_ctl.match = graph_id_label_id_hash_compare;
+
+    /*
+     * Please see the comment of hash_create() for the nelem value 16 here.
+     * HASH_BLOBS flag is set because the key for this hash is fixed-size.
+     */
+    vertex_label_graph_id_id_cache_hash = ShmemInitHash("np_graph (name) cache", 16, 1000, &hash_ctl,
+                 HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
+}
 
 static void invalidate_graph_caches(Datum arg, int cache_id, uint32 hash_value)
 {
     Assert(graph_name_namespace_cache_hash);
 
-    /*
-     * Currently, all entries in the graph caches are flushed because
-     * hash_value is for an entry in NAMESPACEOID cache. Since the caches
-     * are not currently used in performance-critical paths, this seems OK.
-     */
     flush_graph_name_namespace_cache();
+}
 
+static void invalidate_label_caches(Datum arg, int cache_id, uint32 hash_value)
+{
+    Assert(vertex_label_graph_id_id_cache_hash);
+
+    flush_label_graph_id_label_id_cache();
 }
 
 static void flush_graph_name_namespace_cache(void)
@@ -182,6 +268,22 @@ static void flush_graph_name_namespace_cache(void)
 
         if (!hash_search(graph_name_namespace_cache_hash, &entry->key.name, HASH_REMOVE, NULL))
             ereport(ERROR, (errmsg_internal("graph (name) cache corrupted")));
+    }
+}
+
+static void flush_label_graph_id_label_id_cache(void)
+{
+    HASH_SEQ_STATUS hash_seq;
+
+    hash_seq_init(&hash_seq, vertex_label_graph_id_id_cache_hash);
+    for (;;)
+    {
+        vertex_label_graph_id_id_cache_entry *entry = hash_seq_search(&hash_seq);
+        if (!entry)
+            break;
+
+        if (!hash_search(vertex_label_graph_id_id_cache_hash, &entry->key.graph_id, HASH_REMOVE, NULL))
+            ereport(ERROR, (errmsg_internal("label (graphid,labelid) cache corrupted")));
     }
 }
 
@@ -246,4 +348,62 @@ static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple,
     cache_data->namespace = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
     // np_graph.vertex_id_seq
     cache_data->vertex_id_seq = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
+}
+
+const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id)
+{
+    initialize_caches();
+
+    graph_id_label_id_cache_key key = { .graph_id = graph_id, .label_id = label_id };
+
+    vertex_label_graph_id_id_cache_entry *entry;
+    if (entry = hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_FIND, NULL))
+        return &entry->data;
+
+    return search_label_graph_id_label_id_cache_miss(&key);
+}
+
+static vertex_label_cache_data *search_label_graph_id_label_id_cache_miss(graph_id_label_id_cache_key *key)
+{
+    // setup scan keys
+    ScanKeyData scan_keys[2];
+    memcpy(scan_keys, vertex_label_graph_id_id_scan_keys, sizeof(vertex_label_graph_id_id_scan_keys));
+    scan_keys[0].sk_argument = ObjectIdGetDatum(key->graph_id);
+    scan_keys[1].sk_argument = ObjectIdGetDatum(key->label_id);
+
+    // open graph catalog
+    Relation np_graph = table_open(np_vertex_label_relation_id(), AccessShareLock);
+    SysScanDesc scan_desc = systable_beginscan(np_graph, np_vertex_label_graph_id_id_index(), true, NULL, 2, scan_keys);
+
+    // get catalog record
+    // don't need to loop over scan_desc because np_graph_name_namespace_index is UNIQUE
+    HeapTuple tuple = systable_getnext(scan_desc);
+    if (!HeapTupleIsValid(tuple)) {
+        // catalog does not have record
+        systable_endscan(scan_desc);
+        table_close(np_graph, AccessShareLock);
+
+        return NULL;
+    }
+
+    // catalog entry exists add to cache
+    vertex_label_graph_id_id_cache_entry *entry = hash_search(graph_name_namespace_cache_hash, &key, HASH_ENTER, NULL);
+
+    // populate cache
+    fill_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
+
+    // close catalog
+    systable_endscan(scan_desc);
+    table_close(np_graph, AccessShareLock);
+
+    return &entry->data;
+}
+
+static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc)
+{
+    bool is_null;
+    cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
+    cache_data->graph_id = DatumGetObjectId(heap_getattr(tuple, 2, tuple_desc, &is_null));
+    cache_data->label = DatumGetLtreePCopy(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    cache_data->dictionary_id_seq = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
 }

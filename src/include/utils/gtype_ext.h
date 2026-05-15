@@ -15,8 +15,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef AG_GTYPE_EXT_H
-#define AG_GTYPE_EXT_H
+#ifndef NO_GTYPE_EXT_H
+#define NP_GTYPE_EXT_H
 
 #include "postgres.h"
 

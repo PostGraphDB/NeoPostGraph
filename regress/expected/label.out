@@ -153,9 +153,9 @@ SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
   AND label @ 'employee & engineer';
- id | graph_id |           label            
-----+----------+----------------------------
-  5 |       16 | _.person.employee.engineer
+ id | graph_id |           label            |        dictionary_id_seq         
+----+----------+----------------------------+----------------------------------
+  5 |       16 | _.person.employee.engineer | neopostgraph.dictionary_seq_16_5
 (1 row)
 
 
@@ -163,12 +163,12 @@ SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
   AND label @ 'person';
- id | graph_id |           label            
-----+----------+----------------------------
-  2 |       16 | _.person
-  4 |       16 | _.person.employee
-  5 |       16 | _.person.employee.engineer
-  6 |       16 | _.person.contractor
+ id | graph_id |           label            |        dictionary_id_seq         
+----+----------+----------------------------+----------------------------------
+  2 |       16 | _.person                   | neopostgraph.dictionary_seq_16_2
+  4 |       16 | _.person.employee          | neopostgraph.dictionary_seq_16_4
+  5 |       16 | _.person.employee.engineer | neopostgraph.dictionary_seq_16_5
+  6 |       16 | _.person.contractor        | neopostgraph.dictionary_seq_16_6
 (4 rows)
 
 
@@ -256,11 +256,11 @@ SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
   AND label @ 'employee | software';
- id | graph_id |           label            
-----+----------+----------------------------
-  3 |       16 | _.software
-  4 |       16 | _.person.employee
-  5 |       16 | _.person.employee.engineer
+ id | graph_id |           label            |        dictionary_id_seq         
+----+----------+----------------------------+----------------------------------
+  3 |       16 | _.software                 | neopostgraph.dictionary_seq_16_3
+  4 |       16 | _.person.employee          | neopostgraph.dictionary_seq_16_4
+  5 |       16 | _.person.employee.engineer | neopostgraph.dictionary_seq_16_5
 (3 rows)
 
 
@@ -299,33 +299,33 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor'
 
 
 SELECT * FROM NeoPostGraph.np_vertex_label;
- id | graph_id |           label            
-----+----------+----------------------------
-  1 |        1 | _
-  1 |        2 | _
-  1 |        3 | _
-  1 |        4 | _
-  1 |        5 | _
-  1 |        6 | _
-  1 |        7 | _
-  1 |        8 | _
-  1 |        9 | _
-  1 |       10 | _
-  1 |       11 | _
-  1 |       16 | _
-  2 |       16 | _.person
-  3 |       16 | _.software
-  4 |       16 | _.person.employee
-  5 |       16 | _.person.employee.engineer
-  6 |       16 | _.person.contractor
-  1 |       17 | _
-  2 |       17 | _._internal
-  3 |       17 | _.test_label_123
-  4 |       17 | _.인간
-  1 |       18 | _
-  2 |       18 | _.user
-  3 |       18 | _.user_admin
-  4 |       18 | _.user_profile
-  5 |       18 | _.users
+ id | graph_id |           label            |        dictionary_id_seq         
+----+----------+----------------------------+----------------------------------
+  1 |        1 | _                          | neopostgraph.dictionary_seq_1_1
+  1 |        2 | _                          | neopostgraph.dictionary_seq_2_1
+  1 |        3 | _                          | neopostgraph.dictionary_seq_3_1
+  1 |        4 | _                          | neopostgraph.dictionary_seq_4_1
+  1 |        5 | _                          | neopostgraph.dictionary_seq_5_1
+  1 |        6 | _                          | neopostgraph.dictionary_seq_6_1
+  1 |        7 | _                          | neopostgraph.dictionary_seq_7_1
+  1 |        8 | _                          | neopostgraph.dictionary_seq_8_1
+  1 |        9 | _                          | neopostgraph.dictionary_seq_9_1
+  1 |       10 | _                          | neopostgraph.dictionary_seq_10_1
+  1 |       11 | _                          | neopostgraph.dictionary_seq_11_1
+  1 |       16 | _                          | neopostgraph.dictionary_seq_16_1
+  2 |       16 | _.person                   | neopostgraph.dictionary_seq_16_2
+  3 |       16 | _.software                 | neopostgraph.dictionary_seq_16_3
+  4 |       16 | _.person.employee          | neopostgraph.dictionary_seq_16_4
+  5 |       16 | _.person.employee.engineer | neopostgraph.dictionary_seq_16_5
+  6 |       16 | _.person.contractor        | neopostgraph.dictionary_seq_16_6
+  1 |       17 | _                          | neopostgraph.dictionary_seq_17_1
+  2 |       17 | _._internal                | neopostgraph.dictionary_seq_17_2
+  3 |       17 | _.test_label_123           | neopostgraph.dictionary_seq_17_3
+  4 |       17 | _.인간                     | neopostgraph.dictionary_seq_17_4
+  1 |       18 | _                          | neopostgraph.dictionary_seq_18_1
+  2 |       18 | _.user                     | neopostgraph.dictionary_seq_18_2
+  3 |       18 | _.user_admin               | neopostgraph.dictionary_seq_18_3
+  4 |       18 | _.user_profile             | neopostgraph.dictionary_seq_18_4
+  5 |       18 | _.users                    | neopostgraph.dictionary_seq_18_5
 (26 rows)
 

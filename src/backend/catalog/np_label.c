@@ -141,16 +141,39 @@ Oid create_vlabel_sequence(int graph_id, char *namespace)
     return get_relname_relid(seq_name, get_namespace_oid(namespace, false));
 }
 
+Oid create_dictionary_id_sequence(int graph_id, int label_id)
+{
+    ParseState *pstate = make_parsestate(NULL);
+    pstate->p_sourcetext = "(generated CREATE SEQUENCE command)";
+
+    char *seq_name = psprintf("dictionary_seq_%d_%d", graph_id, label_id);
+
+    CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
+    seq_stmt->sequence = makeRangeVar("neopostgraph", seq_name, -1);
+    seq_stmt->options = NIL;
+    seq_stmt->ownerId = InvalidOid;
+    seq_stmt->for_identity = false;
+    seq_stmt->if_not_exists = false;
+
+    DefineSequence(pstate, seq_stmt);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(seq_name, get_namespace_oid("neopostgraph", false));
+}
+
 void insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq)
 {
     Relation rel = table_open(np_vertex_label_relation_id(), RowExclusiveLock);
 
-    Datum values[3] = {
-        DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq)),
+    Datum label_id = DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq));
+    Datum values[4] = {
+        label_id,
         Int32GetDatum(graph_id),
-        label
+        label,
+        ObjectIdGetDatum(create_dictionary_id_sequence(graph_id, DatumGetInt32(label_id)))
     };
-    bool nulls[3] = { false, false, false };
+    bool nulls[4] = { false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
