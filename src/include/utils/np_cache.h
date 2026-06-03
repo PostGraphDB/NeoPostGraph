@@ -20,6 +20,8 @@
 
 #include "ltree.h"
 
+#include "utils/dictionary.h"
+
 // graph_cache_data contains the same fields that ag_graph catalog table has
 typedef struct graph_cache_data
 {
@@ -37,6 +39,16 @@ typedef struct vertex_label_cache_data
     ltree *label;
 } vertex_label_cache_data;
 
+typedef struct vertex_dictionary_cache_data
+{
+    int id;
+    dictionary *dict;
+} vertex_dictionary_cache_data;
+
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);
 const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id);
+
+const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id);
+
+
 #endif

@@ -37,7 +37,6 @@ static void gtype_in_scalar(void *pstate, char *token, gtype_token_type tokentyp
 static char *gtype_to_cstring_worker(StringInfo out, gtype_container *in, int estimated_len, bool indent);
 static void add_indent(StringInfo out, bool indent, int level);
 static Datum gtype_from_cstring(char *str, int len);
-static void gtype_put_escaped_value(StringInfo out, gtype_value *scalar_val);
 
 PG_FUNCTION_INFO_V1(gtype_in);
 Datum gtype_in(PG_FUNCTION_ARGS) {
@@ -148,7 +147,7 @@ static void gtype_in_object_field_start(void *pstate, char *fname, bool isnull) 
     _state->res = push_gtype_value(&_state->parse_state, WGT_KEY, &v);
 }
 
-static void gtype_put_escaped_value(StringInfo out, gtype_value *scalar_val)
+void gtype_put_escaped_value(StringInfo out, gtype_value *scalar_val)
 {
     switch (scalar_val->type)
     {

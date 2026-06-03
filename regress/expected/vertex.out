@@ -13,101 +13,112 @@
  *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */ 
+ */
 LOAD 'neopostgraph';
 
-SELECT FROM NeoPostGraph.vertex_in('{"name": "Alice", "age": 30}');
+SET search_path TO  public, pg_catalog, NeoPostGraph;
+
+SELECT FROM vertex_in('{"name": "Alice", "age": 30}');
 --
 (1 row)
 
 
 
-SELECT NeoPostGraph.vertex_in('{"name": "Alice", "age": 30}');
+SELECT vertex_in('{"name": "Alice", "age": 30}');
                              vertex_in                              
 --------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
 
-SELECT * FROM NeoPostGraph.vertex_in('{"name": "Alice", "age": 30}');
+SELECT * FROM vertex_in('{"name": "Alice", "age": 30}');
                              vertex_in                              
 --------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
 
 
-
-SELECT NeoPostGraph.vertex_in('{}');
+--
+-- Vertex Input Routine
+-- NOTE: Never going to be used
+--
+SELECT vertex_in('{}');
                 vertex_in                 
 ------------------------------------------
  {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_in('{"name": "Alice", "age": 30}');
+SELECT vertex_in('{"name": "Alice", "age": 30}');
                              vertex_in                              
 --------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_in('{"nested": {"a": 1, "b": [2, 3]}}');
+SELECT vertex_in('{"nested": {"a": 1, "b": [2, 3]}}');
                                 vertex_in                                
 -------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_in('{"bool": true, "nullval": null, "float": 3.14}');
+SELECT vertex_in('{"bool": true, "nullval": null, "float": 3.14}');
                                       vertex_in                                       
 --------------------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}');
+SELECT vertex_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}');
                                                         vertex_in                                                        
 -------------------------------------------------------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
 (1 row)
 
 
-SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint, '{}'::NeoPostGraph.gtype);
+
+--
+-- Vertex basic constructor
+--
+SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{}'::gtype);
                vertex_build               
 ------------------------------------------
  {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-
-SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"name": "Alice", "age": 30}'::gtype);
                             vertex_build                            
 --------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint,'{"nested": {"a": 1, "b": [2, 3]}}'::NeoPostGraph.gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"nested": {"a": 1, "b": [2, 3]}}'::gtype);
                               vertex_build                               
 -------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
 (1 row)
 
-SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint,'{"bool": true, "nullval": null, "float": 3.14}'::NeoPostGraph.gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"bool": true, "nullval": null, "float": 3.14}'::gtype);
                                      vertex_build                                     
 --------------------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
 (1 row)
 
 
-SELECT NeoPostGraph.vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::NeoPostGraph.gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
                                                       vertex_build                                                       
 -------------------------------------------------------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
 (1 row)
 
 
-SELECT NeoPostGraph.create_graph('vertex_graph', 'public');
+--
+-- Vertex LTree Label Logic
+--
+SELECT create_graph('vertex_graph', 'public');
 NOTICE:  graph "vertex_graph" has been created
  create_graph 
 --------------
  
 (1 row)
 
-SELECT NeoPostGraph.create_vlabel('vertex_graph', 'person');
+SELECT create_vlabel('vertex_graph', 'person');
 NOTICE:  graph "vertex_graph" has been created
  create_vlabel 
 ---------------
@@ -115,13 +126,13 @@ NOTICE:  graph "vertex_graph" has been created
 (1 row)
 
 
-SELECT * FROM NeoPostGraph.np_graph graph WHERE graph.name = 'vertex_graph';
- id |     name     | namespace |          vertex_labels          |     vertex_id_seq      
-----+--------------+-----------+---------------------------------+------------------------
- 21 | vertex_graph | public    | neopostgraph.np_vertex_label_21 | vertex_label_id_seq_21
+SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
+ id |     name     | namespace |   vertex_labels    |     vertex_id_seq      
+----+--------------+-----------+--------------------+------------------------
+ 21 | vertex_graph | public    | np_vertex_label_21 | vertex_label_id_seq_21
 (1 row)
 
-select * FROM NeoPostGraph.np_vertex_label_21;
+select * FROM np_vertex_label_21;
  id |  ltree   
 ----+----------
   1 | _
@@ -129,8 +140,8 @@ select * FROM NeoPostGraph.np_vertex_label_21;
 (2 rows)
 
 
-SELECT NeoPostGraph.vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
+SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
                                vertex_build                               
@@ -139,7 +150,7 @@ WHERE graph.name = 'vertex_graph'
 (1 row)
 
 
-SELECT NeoPostGraph.create_vlabel('vertex_graph', 'person.employee.engineer');
+SELECT create_vlabel('vertex_graph', 'person.employee.engineer');
 NOTICE:  graph "vertex_graph" has been created
  create_vlabel 
 ---------------
@@ -147,8 +158,8 @@ NOTICE:  graph "vertex_graph" has been created
 (1 row)
 
 
-SELECT NeoPostGraph.vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::NeoPostGraph.gtype)
-FROM NeoPostGraph.np_vertex_label_21 label, NeoPostGraph.np_graph graph
+SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
                                         vertex_build                                        
@@ -157,3 +168,143 @@ WHERE graph.name = 'vertex_graph'
  {"id": 1, "label": "person.employee.engineer", "properties": {"age": 30, "name": "Alice"}}
 (2 rows)
 
+
+--
+-- Vertex with a Dictionary
+--
+-- 1. Default
+--
+
+SELECT dictionary_log(21, 1, '["age", "name"]'::dictionary);
+ dictionary_log 
+----------------
+ 
+(1 row)
+
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'), 1);
+                     vertex_set_dictionary                      
+----------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice"}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
+                            vertex_set_dictionary                             
+------------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice", weight: 9001}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
+                vertex_set_dictionary                
+-----------------------------------------------------
+ {"id": 1, "label": "", "properties": {name: "Bob"}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
+          vertex_set_dictionary           
+------------------------------------------
+ {"id": 1, "label": "", "properties": {}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
+               vertex_set_dictionary                
+----------------------------------------------------
+ {"id": 1, "label": "", "properties": {x: 1, y: 2}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+                                        vertex_set_dictionary                                        
+-----------------------------------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice", flag: true, extra: {"nested": true}}}
+(1 row)
+
+
+--
+-- Vertex with a Dictionary
+--
+-- 2. With show_dictionary_nulls GUC ENABLED
+--
+SET neopostgraph.show_dictionary_nulls = true;
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
+                     vertex_set_dictionary                      
+----------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice"}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
+                            vertex_set_dictionary                             
+------------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice", weight: 9001}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
+                     vertex_set_dictionary                      
+----------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: null, name: "Bob"}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
+                     vertex_set_dictionary                     
+---------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: null, name: null}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
+                           vertex_set_dictionary                           
+---------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: null, name: null, x: 1, y: 2}}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+                                        vertex_set_dictionary                                        
+-----------------------------------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": {age: 30, name: "Alice", flag: true, extra: {"nested": true}}}
+(1 row)
+
+
+--
+-- Vertex with a Dictionary
+--
+-- 3. With show_dictionary_keys GUC DISABLED
+--
+SET neopostgraph.show_dictionary_keys = false;
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
+                   vertex_set_dictionary                   
+-----------------------------------------------------------
+ {"id": 1, "label": "", "properties": [30, "Alice", null]}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
+                         vertex_set_dictionary                         
+-----------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": [30, "Alice", {"weight": 9001}]}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
+                   vertex_set_dictionary                   
+-----------------------------------------------------------
+ {"id": 1, "label": "", "properties": [null, "Bob", null]}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
+            vertex_set_dictionary             
+----------------------------------------------
+ {"id": 1, "label": "", "properties": [null]}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
+                        vertex_set_dictionary                         
+----------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": [null, null, {"x": 1, "y": 2}]}
+(1 row)
+
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+                                     vertex_set_dictionary                                      
+------------------------------------------------------------------------------------------------
+ {"id": 1, "label": "", "properties": [30, "Alice", {"flag": true, "extra": {"nested": true}}]}
+(1 row)
+
+
+RESET neopostgraph.show_dictionary_keys;

@@ -278,6 +278,7 @@ gtype_iterator_token gtype_iterator_next(gtype_iterator **it, gtype_value *val, 
 gtype *gtype_value_to_gtype(gtype_value *val);
 
 char *gtype_to_cstring(StringInfo out, gtype_container *in, int estimated_len);
+void gtype_put_escaped_value(StringInfo out, gtype_value *scalar_val);
 gtype_value *gtype_value_from_cstring(char *str, int len);
 
 #define GTYPEOID \

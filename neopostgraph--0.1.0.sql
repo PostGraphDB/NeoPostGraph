@@ -177,11 +177,14 @@ RETURNS SETOF int
 AS 'MODULE_PATHNAME', 'get_or_vlabel_ids_by_path'
 LANGUAGE C STABLE;
 
---
--- Dictionary Properties Metadata
---
-CREATE TABLE np_vertex_property_dictionaries(graph_id int, label_id int, dictionary_id smallint, dict dictionary);
+CREATE FUNCTION dictionary_log(int, int, dictionary)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
 
-CREATE UNIQUE INDEX np_property_dictionaries_graph_label_dictionary_index
-ON np_vertex_property_dictionaries
-USING btree (graph_id, label_id, dictionary_id);
+
+CREATE FUNCTION vertex_set_dictionary(vertex, int)
+RETURNS vertex
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+

@@ -23,6 +23,8 @@
 #define NP_GET_ARG_VERTEX(x) DATUM_GET_VERTEX(PG_GETARG_DATUM(x))
 #define NP_RETURN_VERTEX(x) PG_RETURN_POINTER(x)
 
+
+
 typedef struct {
     int32 vl_len_;
     int64 id;
@@ -31,5 +33,11 @@ typedef struct {
     int16 dictionary_id;
     gtype_container props;
 } vertex;
+
+extern bool show_dictionary_keys;
+extern bool show_dictionary_nulls;
+
+void assign_show_dictionary_keys(bool newval, void *extra);
+void assign_show_dictionary_nulls(bool newval, void *extra);
 
 #endif

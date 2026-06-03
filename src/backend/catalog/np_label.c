@@ -66,7 +66,8 @@ void create_default_vlabel(int graph_id, Oid vertex_id_seq)
 {
     int label_id = insert_vlabel(graph_id, DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), vertex_id_seq);
 
-    create_vertex_property_dictionary(graph_id, label_id);
+    Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
+    create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
 }
 
 
@@ -103,10 +104,10 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
     if (!entry)
         ereport(ERROR,
                 (errcode(ERRCODE_UNDEFINED_SCHEMA),
-                errmsg("graph \"%s\" already exists in the namespace \"%s\".", graph_name, get_namespace_name(namespace)),
+                errmsg("graph \"%s\" does not exist \"%s\".", graph_name, get_namespace_name(namespace)),
                 PG_ARGISNULL(1) ?
                     errhint("When namespace is not specified, the graph is created in the first namespace in the search path. Consider changing the search path or specifying a namespace explicitly.") :
-                    errhint("Use a different graph name or create the graph in a different namespace.")
+                    errhint("Use a different graph name or create the graph.")
                 ));
 
 

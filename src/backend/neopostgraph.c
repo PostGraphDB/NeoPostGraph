@@ -17,8 +17,10 @@
 #include "postgres.h"
 
 #include "fmgr.h"
-
+#include "utils/guc.h"
 #include "utils/elog.h"
+
+#include "utils/vertex.h"
 
 PG_MODULE_MAGIC;
 
@@ -26,6 +28,33 @@ void _PG_init(void);
 
 void _PG_init(void)
 {
+
+    DefineCustomBoolVariable(
+        "neopostgraph.show_dictionary_keys",
+        "Enable/disable showing dictionary keys in vertex",
+        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable", // long description (can be NULL)
+         &show_dictionary_keys,
+        true,
+        PGC_USERSET,
+        0,
+        NULL,
+        assign_show_dictionary_keys,
+        NULL
+    );
+    DefineCustomBoolVariable(
+        "neopostgraph.show_dictionary_nulls",
+        "Enable/disable showing dictionary keys in vertex",
+        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable", // long description (can be NULL)
+         &show_dictionary_nulls,
+        false,
+        PGC_USERSET,
+        0,
+        NULL,
+        assign_show_dictionary_nulls,
+        NULL
+    );
+    MarkGUCPrefixReserved("neopostgraph");
+
     ereport(LOG, "PostGraph extension initialized");
 }
 

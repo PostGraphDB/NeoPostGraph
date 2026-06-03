@@ -34,6 +34,6 @@ typedef struct {
     gtype_container array;
 } dictionary;
 
-void create_vertex_property_dictionary(int graph_id, int label_id);
-
+Oid create_vertex_property_dictionary(int graph_id, int label_id);
+void create_vertex_dictionary_metadata_btree_index(int graph_id, int label_id, int dictionary_id);
 #endif
