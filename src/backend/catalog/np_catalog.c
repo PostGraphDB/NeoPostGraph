@@ -15,8 +15,10 @@
 
 #include "postgres.h"
 
+#include "catalog/indexing.h"
+#include "catalog/pg_type.h"
+#include "nodes/parsenodes.h"
 #include "catalog/namespace.h"
-#include "catalog/pg_namespace_d.h"
 #include "utils/lsyscache.h"
 
 #include "catalog/np_catalog.h"
@@ -37,4 +39,25 @@ Oid np_relation_id(const char *name, const char *kind)
                         errmsg("%s \"%s\" does not exist", kind, name)));
 
     return id;
+}
+
+Oid public_catalog_namespace_id(void)
+{
+    return get_namespace_oid("public", false);
+}
+
+Oid neopostgraph_catalog_namespace_id(void)
+{
+    return get_namespace_oid("neopostgraph", false);
+}
+// NOT NULL
+Constraint *build_not_null_constraint(void)
+{
+    Constraint *not_null;
+
+    not_null = makeNode(Constraint);
+    not_null->contype = CONSTR_NOTNULL;
+    not_null->location = -1;
+
+    return not_null;
 }

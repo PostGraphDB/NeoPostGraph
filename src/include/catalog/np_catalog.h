@@ -17,9 +17,15 @@
 #define NP_CATALOG_H
 
 #include "postgres.h"
+#include "catalog/namespace.h"
 
 Oid np_namespace_id(void);
 
 Oid np_relation_id(const char *name, const char *kind);
+
+Oid public_catalog_namespace_id(void);
+Oid neopostgraph_catalog_namespace_id(void);
+
+Constraint *build_not_null_constraint(void);
 
 #endif

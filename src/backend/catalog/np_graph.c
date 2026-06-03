@@ -35,7 +35,7 @@
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
-void insert_graph(Name graph_name, Oid namespace, int graph_id, Oid vertex_id_seq);
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq);
 
 PG_FUNCTION_INFO_V1(create_graph);
 Datum create_graph(PG_FUNCTION_ARGS)
@@ -74,7 +74,11 @@ Datum create_graph(PG_FUNCTION_ARGS)
 
     Oid vertex_id_seq = create_vlabel_sequence(graph_id, get_namespace_name(namespace));
 
-    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_id_seq);
+    Oid vertex_label = create_vertex_label_metadata_table(graph_id);
+    create_vertex_label_metadata_btree_index(graph_id);
+    create_vertex_label_metadata_gist_index(graph_id);
+
+    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq);
     create_default_vlabel(graph_id, vertex_id_seq);
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
@@ -83,17 +87,18 @@ Datum create_graph(PG_FUNCTION_ARGS)
 }
 
 // INSERT INTO postgraph.ag_graph VALUES (id, graph_name, namespace, vertex_id_seq)
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_id_seq)
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq)
 {
     Relation rel = table_open(np_graph_relation_id(), RowExclusiveLock);
 
-    Datum values[4] = {
+    Datum values[5] = {
         Int32GetDatum(graph_id),
         NameGetDatum(graph_name),
         ObjectIdGetDatum(namespace),
+        ObjectIdGetDatum(vertex_label),
         ObjectIdGetDatum(vertex_id_seq)
     };
-    bool nulls[4] = { false, false, false, false };
+    bool nulls[5] = { false, false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 

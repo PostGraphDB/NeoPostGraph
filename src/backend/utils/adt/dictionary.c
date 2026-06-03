@@ -1,0 +1,223 @@
+/*
+* PostGraph
+ * Copyright (C) 2026 by PostGraph
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+#include "postgres.h"
+
+#include <string.h>
+
+#include "access/genam.h"
+#include "executor/nodeAgg.h"
+#include "funcapi.h"
+#include "fmgr.h"
+#include "libpq/pqformat.h"
+#include "miscadmin.h"
+#include "utils/builtins.h"
+#include "varatt.h"
+
+#include "utils/gtype.h"
+#include "utils/dictionary.h"
+
+#include "access/heapam.h"
+#include "access/htup.h"
+#include "access/htup_details.h"
+#include "access/skey.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_type.h"
+#include "commands/sequence.h"
+#include "lib/stringinfo.h"
+#include "nodes/execnodes.h"
+#include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
+#include "storage/lockdefs.h"
+#include "utils/array.h"
+#include "utils/lsyscache.h"
+#include "utils/rel.h"
+#include "utils/relcache.h"
+#include "utils/syscache.h"
+#include "tcop/utility.h"
+#include "parser/parse_type.h"
+
+PG_FUNCTION_INFO_V1(dictionary_in);
+Datum dictionary_in(PG_FUNCTION_ARGS) {
+    char *str = PG_GETARG_CSTRING(0);
+    gtype_value *val = gtype_value_from_cstring(str, strlen(str));
+
+
+    if (val->type != GTV_ARRAY)
+        ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+            errmsg("invalid format for dictionary, expects and array"));
+
+    gtype *gt = gtype_value_to_gtype(val);
+
+    dictionary *dict = palloc(sizeof(dictionary) + VARSIZE(gt) - sizeof(uint32));
+    dict->dictionary_id = 0;
+    memcpy(&dict->array, &gt->root, VARSIZE(gt) - sizeof(uint32));
+
+    SET_VARSIZE(dict, VARSIZE(gt) + VARHDRSZ + sizeof(uint64));
+
+    NP_RETURN_DICTIONARY(dict);
+}
+
+PG_FUNCTION_INFO_V1(dictionary_build);
+Datum dictionary_build(PG_FUNCTION_ARGS) {
+    gtype *gt = NP_GET_ARG_GTYPE_P(1);
+    dictionary *dict = palloc(sizeof(dictionary) + VARSIZE(gt) - sizeof(uint32));
+    dict->dictionary_id = PG_GETARG_INT16(0);
+
+    memcpy(&dict->array, &gt->root, VARSIZE(gt) - sizeof(uint32));
+
+    SET_VARSIZE(dict, VARSIZE(gt) + VARHDRSZ + sizeof(uint64));
+
+    NP_RETURN_DICTIONARY(dict);
+}
+
+PG_FUNCTION_INFO_V1(dictionary_out);
+Datum dictionary_out(PG_FUNCTION_ARGS) {
+    dictionary *dict = NP_GET_ARG_DICTIONARY(0);
+
+    StringInfo out = makeStringInfo();
+    enlargeStringInfo(out, 64);
+    appendStringInfoString(out, "dict{");
+    appendStringInfoString(out,
+        DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(dict->dictionary_id))));
+    appendStringInfoString(out, "}");
+
+    PG_RETURN_CSTRING(gtype_to_cstring(out, &dict->array, 0));
+}
+
+
+Oid create_vertex_property_dictionary(int graph_id, int label_id) {
+    CreateStmt *create_stmt = makeNode(CreateStmt);;
+
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_property_dictionary_%d_%d", graph_id, label_id), -1);
+
+    ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *dict = makeColumnDef("dict", DICTIONARYOID, -1, InvalidOid);
+    dict->constraints = list_make1(build_not_null_constraint());
+
+    create_stmt->tableElts = list_make2(id, dict);
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    PlannedStmt *wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+    // CommandCounterIncrement() is called in ProcessUtility()
+    CommandCounterIncrement();
+
+    ParseState *pstate;
+    CreateSeqStmt *seq_stmt;
+    pstate = make_parsestate(NULL);
+    pstate->p_sourcetext = "(generated CREATE SEQUENCE command)";
+
+    seq_stmt = makeNode(CreateSeqStmt);
+    seq_stmt->sequence = makeRangeVar("neopostgraph", psprintf("np_vertex_property_dictionary_seq_%d_%d", graph_id, label_id), -1);
+    seq_stmt->options = NIL;
+    seq_stmt->ownerId = InvalidOid;
+    seq_stmt->for_identity = false;
+    seq_stmt->if_not_exists = false;
+
+    DefineSequence(pstate, seq_stmt);
+    CommandCounterIncrement();
+
+    return get_relname_relid(psprintf("np_vertex_property_dictionary_%d_%d", graph_id, label_id), get_namespace_oid("neopostgraph", false));
+
+}
+
+void create_vertex_dictionary_metadata_btree_index(int graph_id, int label_id, int dictionary_id)
+{
+    IndexStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(IndexStmt);
+
+    create_stmt->idxname = psprintf("np_vertex_property_dictionary_index_%d_%d", graph_id, label_id);
+    create_stmt->relation = makeRangeVar("neopostgraph", psprintf("np_vertex_property_dictionary_%d_%d", graph_id, label_id), -1);
+
+    IndexElem *id = makeNode(IndexElem);
+    id->name = "id";
+
+    create_stmt->accessMethod = "btree";
+    create_stmt->tableSpace = NULL;
+    create_stmt->indexParams = list_make1(id);
+    create_stmt->indexIncludingParams = NIL;
+    create_stmt->options = NIL;
+    create_stmt->whereClause = NULL;
+    create_stmt->excludeOpNames = NIL;
+    create_stmt->idxcomment = "primary index for autogenerated vertex dictionary metadata table";
+    create_stmt->indexOid = InvalidOid;
+
+    create_stmt->unique = true;
+    create_stmt->primary = true;
+    create_stmt->isconstraint = true;
+    create_stmt->concurrent = false; // Index and Table start empty
+    create_stmt->deferrable = false;
+    create_stmt->initdeferred = false;
+    create_stmt->if_not_exists = false;
+    create_stmt->reset_default_tblspc = false;
+
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
+
+}
+
+
+PG_FUNCTION_INFO_V1(dictionary_log);
+Datum dictionary_log(PG_FUNCTION_ARGS) {
+    int32 graph_id = PG_GETARG_INT32(0);
+    int32 label_id = PG_GETARG_INT32(1);
+    dictionary *dict = NP_GET_ARG_DICTIONARY(2);
+
+    Relation rel = table_open(np_relation_id(psprintf("np_vertex_property_dictionary_%d_%d", graph_id, label_id), "table"), RowExclusiveLock);
+
+    Datum values[2] = {
+        DirectFunctionCall1(nextval_oid,
+            ObjectIdGetDatum(get_relname_relid(
+                                psprintf("np_vertex_property_dictionary_seq_%d_%d", graph_id, label_id),
+                                np_namespace_id()))),
+        DICTIONARY_GET_DATUM(dict)
+    };
+    bool nulls[2] = { false, false};
+
+    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+
+    table_close(rel, RowExclusiveLock);
+
+    CommandCounterIncrement();
+
+    PG_RETURN_VOID();
+}

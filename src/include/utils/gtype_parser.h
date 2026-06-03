@@ -17,8 +17,8 @@
  * Declarations for gtype parser.
  */
 
-#ifndef POSTGRAPH_GTYPE_PARSER_H
-#define POSTGRAPH_GTYPE_PARSER_H
+#ifndef NP_GTYPE_PARSER_H
+#define NP_GTYPE_PARSER_H
 
 #include "lib/stringinfo.h"
 
