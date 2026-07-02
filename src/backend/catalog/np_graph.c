@@ -77,16 +77,15 @@ Datum create_graph(PG_FUNCTION_ARGS)
     Oid vertex_label = create_vertex_label_metadata_table(graph_id);
     create_vertex_label_metadata_btree_index(graph_id);
     create_vertex_label_metadata_gist_index(graph_id);
-
+    create_default_vlabel(graph_id, vertex_id_seq, namespace);
     insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq);
-    create_default_vlabel(graph_id, vertex_id_seq);
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
 
-// INSERT INTO postgraph.ag_graph VALUES (id, graph_name, namespace, vertex_id_seq)
+// INSERT INTO postgraph.np_graph VALUES (id, graph_name, namespace, vertex_id_seq)
 void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq)
 {
     Relation rel = table_open(np_graph_relation_id(), RowExclusiveLock);

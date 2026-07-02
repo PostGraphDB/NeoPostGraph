@@ -50,6 +50,7 @@ Oid neopostgraph_catalog_namespace_id(void)
 {
     return get_namespace_oid("neopostgraph", false);
 }
+
 // NOT NULL
 Constraint *build_not_null_constraint(void)
 {

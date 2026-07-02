@@ -292,3 +292,16 @@ next_key_extra:
 
     NP_RETURN_VERTEX(return_v);
 }
+
+
+/*
+PG_FUNCTION_INFO_V1(vertex_insert);
+Datum vertex_set_dictionary(PG_FUNCTION_ARGS) {
+    const vertex_dictionary_cache_data *dictionary_cache =
+        search_vertex_dictionary_cache(v->graph_id, v->label_id, dictionary_id);
+
+
+
+    PG_RETURN_VOID();
+}
+*/

@@ -17,6 +17,7 @@
 #define NP_VERTEX_H
 
 #include "utils/gtype.h"
+#include "catalog/np_catalog.h"
 
 #define DATUM_GET_VERTEX(d) ((vertex *)PG_DETOAST_DATUM(d))
 #define VERTEX_GET_DATUM(p) PointerGetDatum(p)
@@ -39,5 +40,14 @@ extern bool show_dictionary_nulls;
 
 void assign_show_dictionary_keys(bool newval, void *extra);
 void assign_show_dictionary_nulls(bool newval, void *extra);
+
+
+
+#define VERTEXOID \
+(GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("vertex"), ObjectIdGetDatum(np_namespace_id())))
+
+#define VERTEXARRAYOID \
+(GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("_vertex"), ObjectIdGetDatum(np_namespace_id())))
+
 
 #endif

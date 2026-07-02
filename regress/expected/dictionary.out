@@ -15,21 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */ 
 LOAD 'neopostgraph';
-
-
 SELECT NeoPostGraph.dictionary_in('["a", "b", "c"]');
      dictionary_in      
 ------------------------
  dict{0}["a", "b", "c"]
 (1 row)
 
-
 SELECT NeoPostGraph.dictionary_build(0::smallint, '["a", "b", "c"]');
     dictionary_build    
 ------------------------
  dict{0}["a", "b", "c"]
 (1 row)
-
 
 SELECT NeoPostGraph.dictionary_build(1::smallint, '["a", "b", "c"]');
     dictionary_build    

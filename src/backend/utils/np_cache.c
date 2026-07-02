@@ -520,6 +520,7 @@ static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple
     bool is_null;
     cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
     cache_data->label = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
+    cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
 }
 
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id)

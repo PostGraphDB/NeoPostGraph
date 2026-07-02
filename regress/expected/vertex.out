@@ -15,14 +15,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 LOAD 'neopostgraph';
-
 SET search_path TO  public, pg_catalog, NeoPostGraph;
-
 SELECT FROM vertex_in('{"name": "Alice", "age": 30}');
 --
 (1 row)
-
-
 
 SELECT vertex_in('{"name": "Alice", "age": 30}');
                              vertex_in                              
@@ -35,7 +31,6 @@ SELECT * FROM vertex_in('{"name": "Alice", "age": 30}');
 --------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
-
 
 --
 -- Vertex Input Routine
@@ -71,8 +66,6 @@ SELECT vertex_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 9
  {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
 (1 row)
 
-
-
 --
 -- Vertex basic constructor
 --
@@ -100,13 +93,11 @@ SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"bool": true, "nullval": null, 
  {"id": 0, "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
 (1 row)
 
-
 SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
                                                       vertex_build                                                       
 -------------------------------------------------------------------------------------------------------------------------
  {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
 (1 row)
-
 
 --
 -- Vertex LTree Label Logic
@@ -125,7 +116,6 @@ NOTICE:  graph "vertex_graph" has been created
  
 (1 row)
 
-
 SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
  id |     name     | namespace |   vertex_labels    |     vertex_id_seq      
 ----+--------------+-----------+--------------------+------------------------
@@ -133,12 +123,11 @@ SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
 (1 row)
 
 select * FROM np_vertex_label_21;
- id |  ltree   
-----+----------
-  1 | _
-  2 | _.person
+ id |  ltree   |   vertex_tbl   
+----+----------+----------------
+  1 | _        | np_vertex_21_1
+  2 | _.person | np_vertex_21_2
 (2 rows)
-
 
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
@@ -149,14 +138,12 @@ WHERE graph.name = 'vertex_graph'
  {"id": 0, "label": "person", "properties": {"age": 30, "name": "Alice"}}
 (1 row)
 
-
 SELECT create_vlabel('vertex_graph', 'person.employee.engineer');
 NOTICE:  graph "vertex_graph" has been created
  create_vlabel 
 ---------------
  
 (1 row)
-
 
 SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
@@ -168,19 +155,16 @@ WHERE graph.name = 'vertex_graph'
  {"id": 1, "label": "person.employee.engineer", "properties": {"age": 30, "name": "Alice"}}
 (2 rows)
 
-
 --
 -- Vertex with a Dictionary
 --
 -- 1. Default
 --
-
 SELECT dictionary_log(21, 1, '["age", "name"]'::dictionary);
  dictionary_log 
 ----------------
  
 (1 row)
-
 
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'), 1);
                      vertex_set_dictionary                      
@@ -218,14 +202,12 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice
  {"id": 1, "label": "", "properties": {age: 30, name: "Alice", flag: true, extra: {"nested": true}}}
 (1 row)
 
-
 --
 -- Vertex with a Dictionary
 --
 -- 2. With show_dictionary_nulls GUC ENABLED
 --
 SET neopostgraph.show_dictionary_nulls = true;
-
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
                      vertex_set_dictionary                      
 ----------------------------------------------------------------
@@ -262,14 +244,12 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alic
  {"id": 1, "label": "", "properties": {age: 30, name: "Alice", flag: true, extra: {"nested": true}}}
 (1 row)
 
-
 --
 -- Vertex with a Dictionary
 --
 -- 3. With show_dictionary_keys GUC DISABLED
 --
 SET neopostgraph.show_dictionary_keys = false;
-
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
                    vertex_set_dictionary                   
 -----------------------------------------------------------
@@ -306,5 +286,15 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice
  {"id": 1, "label": "", "properties": [30, "Alice", {"flag": true, "extra": {"nested": true}}]}
 (1 row)
 
+\dt public
+        List of tables
+ Schema | Name | Type | Owner 
+--------+------+------+-------
+(0 rows)
+
+SELECT * FROM public.np_vertex_21_1;
+ id | vertex 
+----+--------
+(0 rows)
 
 RESET neopostgraph.show_dictionary_keys;

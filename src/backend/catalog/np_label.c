@@ -44,6 +44,7 @@
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 #include "utils/dictionary.h"
+#include "utils/vertex.h"
 
 #define LTREEOID \
 (GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("ltree"), ObjectIdGetDatum(public_catalog_namespace_id())))
@@ -53,7 +54,7 @@
 #define CATALOG_LTREE_ROOT_LABEL "_"
 
 
-int insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq);
+int insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq, Oid vertex_tbl);
 Datum text_array_to_lxtquery(ArrayType *label_array);
 Datum text_array_to_lxtquery_or(ArrayType *label_array);
 
@@ -62,12 +63,18 @@ PG_FUNCTION_INFO_V1(ltree_in);
 PG_FUNCTION_INFO_V1(ltree_addltree);
 PG_FUNCTION_INFO_V1(ltxtq_in);
 
-void create_default_vlabel(int graph_id, Oid vertex_id_seq)
+Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
 {
-    int label_id = insert_vlabel(graph_id, DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), vertex_id_seq);
+    Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq)));
+
+    Oid vertex_tbl = create_vertex_tables(graph_id, label_id, namespace);
+
+    insert_vlabel(graph_id, DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, vertex_tbl);
 
     Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
+
+    return vertex_tbl;
 }
 
 
@@ -110,24 +117,58 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
                     errhint("Use a different graph name or create the graph.")
                 ));
 
-
-    int label_id = insert_vlabel(
+    Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->vertex_id_seq)));
+    Oid vertex_tbl = create_vertex_tables(entry->id, label_id, namespace);
+    insert_vlabel(
         entry->id,
         DirectFunctionCall2(ltree_addltree,
             DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
             PG_GETARG_DATUM(1)
         ),
-        entry->vertex_id_seq);
+        label_id,
+        vertex_tbl);
 
-    create_vertex_property_dictionary(entry->id, label_id);
+    create_vertex_property_dictionary(entry->id, vertex_tbl);
+    //create_vertex_tables(entry->id, label_id, namespace);
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
 
-void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq)
-{
-    
+Oid create_vertex_tables(int graph_id, int label_id, Oid namespace) {
+    CreateStmt *create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), psprintf("np_vertex_%d_%d", graph_id, label_id), -1);
+
+    ColumnDef *id = makeColumnDef("id", INT8OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *vertex = makeColumnDef("vertex", VERTEXOID, -1, InvalidOid);
+    vertex->constraints = list_make1(build_not_null_constraint());
+
+    create_stmt->tableElts = list_make2(id, vertex);
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    PlannedStmt *wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+    // CommandCounterIncrement() is called in ProcessUtility()
+    CommandCounterIncrement();
+
+    return get_relname_relid(psprintf("np_vertex_%d_%d", graph_id, label_id), namespace);
 }
 
 Oid create_vlabel_sequence(int graph_id, char *namespace)
@@ -152,16 +193,16 @@ Oid create_vlabel_sequence(int graph_id, char *namespace)
 }
 
 
-int insert_vlabel(int graph_id, Datum label, Oid vertex_id_seq)
+int insert_vlabel(int graph_id, Datum label,Oid label_id, Oid vertex_tbl)
 {
     Relation rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", graph_id), "table"), RowExclusiveLock);
 
-    Datum label_id = DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq));
-    Datum values[2] = {
-        label_id,
-        label
+    Datum values[3] = {
+        ObjectIdGetDatum(label_id),
+        label,
+        ObjectIdGetDatum(vertex_tbl)
     };
-    bool nulls[2] = { false, false};//, false };
+    bool nulls[3] = { false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
@@ -214,11 +255,9 @@ get_vlabel_ids_by_path(PG_FUNCTION_ARGS)
 
         cache_entry = search_graph_name_namespace_cache(graph_name, namespace);
         if (!cache_entry)
-        {
             ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
                             errmsg("graph \"%s\" does not exist in namespace \"%s\"", 
                             graph_name, get_namespace_name(namespace))));
-        }
 
         if (PG_ARGISNULL(1))
             ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label array must not be NULL")));
@@ -226,7 +265,6 @@ get_vlabel_ids_by_path(PG_FUNCTION_ARGS)
         Relation rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", cache_entry->id), "table"), AccessShareLock);
 
         ScanKeyData skey[1];
-       // ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(cache_entry->id));
         ScanKeyInit(&skey[0], 2, 14,
             DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
             text_array_to_lxtquery(PG_GETARG_ARRAYTYPE_P(1))
@@ -254,12 +292,10 @@ get_vlabel_ids_by_path(PG_FUNCTION_ARGS)
         Datum id_val = heap_getattr(tuple, 1, RelationGetDescr(fctx->rel), &isnull);
         SRF_RETURN_NEXT(funcctx, id_val);
     }
-    else
-    {
-        systable_endscan(scan);
-        table_close(fctx->rel, AccessShareLock);
-        SRF_RETURN_DONE(funcctx);
-    }
+
+    systable_endscan(scan);
+    table_close(fctx->rel, AccessShareLock);
+    SRF_RETURN_DONE(funcctx);
 }
 
 Datum
@@ -436,8 +472,10 @@ Oid create_vertex_label_metadata_table(int graph_id)
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
     ltree->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *vertex_tbl = makeColumnDef("vertex_tbl", REGCLASSOID, -1, InvalidOid);
+    ltree->constraints = list_make1(build_not_null_constraint());
 
-    create_stmt->tableElts = list_make2(id, ltree);
+    create_stmt->tableElts = list_make3(id, ltree, vertex_tbl);
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;

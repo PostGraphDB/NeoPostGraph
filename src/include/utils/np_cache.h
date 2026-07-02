@@ -37,6 +37,7 @@ typedef struct vertex_label_cache_data
     int id;
     int graph_id;
     ltree *label;
+    Oid vertex_tbl;
 } vertex_label_cache_data;
 
 typedef struct vertex_dictionary_cache_data

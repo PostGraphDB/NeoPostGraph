@@ -109,4 +109,7 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
 
+\dt public
+SELECT * FROM public.np_vertex_21_1;
+
 RESET neopostgraph.show_dictionary_keys;
