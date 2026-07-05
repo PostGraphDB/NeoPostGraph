@@ -34,7 +34,7 @@
 #include "utils/gtype.h"
 #include "utils/dictionary.h"
 #include "utils/vertex.h"
-
+#include "catalog/np_label.h"
 
 bool show_dictionary_keys = true;
 bool show_dictionary_nulls = false;
@@ -95,8 +95,6 @@ Datum vertex_build(PG_FUNCTION_ARGS) {
     NP_RETURN_VERTEX(v);
 }
 
-PG_FUNCTION_INFO_V1(ltree_out);
-
 PG_FUNCTION_INFO_V1(vertex_out);
 Datum vertex_out(PG_FUNCTION_ARGS) {
     vertex *v = NP_GET_ARG_VERTEX(0);
@@ -109,7 +107,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
     // label
     appendStringInfoString(buffer, ", \"label\": \"");
     if (v->graph_id != 0 && v->label_id != 0) {
-        vertex_label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
+        label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
         appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(cache->label)) + 2));
     }
 
@@ -292,16 +290,3 @@ next_key_extra:
 
     NP_RETURN_VERTEX(return_v);
 }
-
-
-/*
-PG_FUNCTION_INFO_V1(vertex_insert);
-Datum vertex_set_dictionary(PG_FUNCTION_ARGS) {
-    const vertex_dictionary_cache_data *dictionary_cache =
-        search_vertex_dictionary_cache(v->graph_id, v->label_id, dictionary_id);
-
-
-
-    PG_RETURN_VOID();
-}
-*/

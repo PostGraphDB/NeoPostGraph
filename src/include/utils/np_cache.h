@@ -30,15 +30,17 @@ typedef struct graph_cache_data
     Oid namespace;
     Oid vertex_labels;
     Oid vertex_id_seq;
+    Oid edge_labels;
+    Oid edge_id_seq;
 } graph_cache_data;
 
-typedef struct vertex_label_cache_data
+typedef struct label_cache_data
 {
     int id;
     int graph_id;
     ltree *label;
     Oid vertex_tbl;
-} vertex_label_cache_data;
+} label_cache_data;
 
 typedef struct vertex_dictionary_cache_data
 {
@@ -47,7 +49,9 @@ typedef struct vertex_dictionary_cache_data
 } vertex_dictionary_cache_data;
 
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);
-const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id);
+const label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id);
+const label_cache_data *search_edge_label_graph_id_label_id_cache(int graph_id, int label_id);
+
 
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id);
 

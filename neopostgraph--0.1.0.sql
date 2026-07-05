@@ -25,6 +25,8 @@
 CREATE TYPE gtype;
 CREATE TYPE dictionary;
 CREATE TYPE vertex;
+CREATE TYPE edge;
+
 --
 -- gtype datatype
 --
@@ -134,6 +136,46 @@ PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
 --
+-- edge datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION edge_in(cstring) RETURNS edge
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION edge_out(edge) RETURNS cstring
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE edge (
+    INPUT = edge_in,
+    OUTPUT = edge_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);
+
+--
+-- Constructor Functions
+--
+CREATE FUNCTION edge_build(int8, int, int, smallint, vertex, vertex, gtype)
+RETURNS edge
+LANGUAGE C
+IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+
+--
 -- catalog tables
 --
 
@@ -145,7 +187,9 @@ CREATE TABLE np_graph (
     name name NOT NULL,
     namespace regnamespace NOT NULL,
     vertex_labels regclass NOT NULL,
-    vertex_id_seq regclass NOT NULL
+    vertex_id_seq regclass NOT NULL,
+    edge_labels regclass NOT NULL,
+    edge_id_seq regclass NOT NULL
 );
 
 CREATE SEQUENCE np_graph_id_seq START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE 5;
@@ -166,6 +210,12 @@ CREATE FUNCTION create_vlabel(graph_name Name, label public.ltree, namespace tex
 RETURNS void 
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION create_elabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
 
 CREATE FUNCTION get_vlabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
 RETURNS SETOF int

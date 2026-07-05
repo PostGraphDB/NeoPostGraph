@@ -24,15 +24,18 @@
 
 #include "ltree.h"
 
+extern Datum ltree_out(PG_FUNCTION_ARGS); 
+
 #define CATALOG_LTREE_ROOT_LABEL "_"
 
 Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace);
+Oid create_default_elabel(int graph_id, Oid vertex_id_seq, Oid namespace);
 void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq);
-Oid create_vertex_label_metadata_table(int graph_id);
-void create_vertex_label_metadata_btree_index(int graph_id);
-void create_vertex_label_metadata_gist_index(int graph_id);
+Oid create_label_metadata_table(char *meta_tbl_name);
+void create_metadata_btree_index(char *tbl_name);
+void create_metadata_gist_index(char *tbl_name);
 
-Oid create_vlabel_sequence(int graph_id, char *namespace);
+Oid create_label_sequence(char *seq_name, char *namespace);
 
 Oid create_vertex_tables(int graphid, int vertex_id_seq, Oid namespace);
 

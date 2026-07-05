@@ -1,0 +1,157 @@
+/*
+ * Copyright (C) 2026 PostGraphDB
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+LOAD 'neopostgraph';
+SET search_path TO  public, pg_catalog, NeoPostGraph;
+SELECT FROM edge_in('{"name": "Alice", "age": 30}');
+--
+(1 row)
+
+SELECT edge_in('{"name": "Alice", "age": 30}');
+                                                     edge_in                                                     
+-----------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"age": 30, "name": "Alice"}}
+(1 row)
+
+SELECT * FROM edge_in('{"name": "Alice", "age": 30}');
+                                                     edge_in                                                     
+-----------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"age": 30, "name": "Alice"}}
+(1 row)
+
+--
+-- Edge Input Routine
+-- NOTE: Never going to be used
+--
+SELECT edge_in('{}');
+                                        edge_in                                        
+---------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {}}
+(1 row)
+
+SELECT edge_in('{"name": "Alice", "age": 30}');
+                                                     edge_in                                                     
+-----------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"age": 30, "name": "Alice"}}
+(1 row)
+
+SELECT edge_in('{"nested": {"a": 1, "b": [2, 3]}}');
+                                                       edge_in                                                        
+----------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
+(1 row)
+
+SELECT edge_in('{"bool": true, "nullval": null, "float": 3.14}');
+                                                              edge_in                                                              
+-----------------------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
+(1 row)
+
+SELECT edge_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}');
+                                                                               edge_in                                                                                
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
+(1 row)
+
+--
+-- Edge basic constructor
+--
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{}'::gtype);
+                                      edge_build                                       
+---------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {}}
+(1 row)
+
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Alice", "age": 30}'::gtype);
+                                                   edge_build                                                    
+-----------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"age": 30, "name": "Alice"}}
+(1 row)
+
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"nested": {"a": 1, "b": [2, 3]}}'::gtype);
+                                                      edge_build                                                      
+----------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
+(1 row)
+
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"bool": true, "nullval": null, "float": 3.14}'::gtype);
+                                                            edge_build                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
+(1 row)
+
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
+                                                                              edge_build                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
+(1 row)
+
+--
+-- Vertex LTree Label Logic
+--
+SELECT create_graph('edge_graph', 'public');
+NOTICE:  graph "edge_graph" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+SELECT create_elabel('edge_graph', 'person');
+NOTICE:  graph "edge_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT * FROM np_graph graph WHERE graph.name = 'edge_graph';
+ id |    name    | namespace |   vertex_labels    |     vertex_id_seq      |   edge_labels    |     edge_id_seq      
+----+------------+-----------+--------------------+------------------------+------------------+----------------------
+ 26 | edge_graph | public    | np_vertex_label_26 | vertex_label_id_seq_26 | np_edge_label_26 | edge_label_id_seq_26
+(1 row)
+
+select * FROM np_edge_label_26;
+ id |  ltree   |     tbl      
+----+----------+--------------
+  1 | _        | np_edge_26_1
+  2 | _.person | np_edge_26_2
+(2 rows)
+
+SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype)
+FROM np_edge_label_26 label, np_graph graph
+WHERE graph.name = 'edge_graph'
+  AND label.ltree @ 'person';
+                                                                                 edge_build                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
+(1 row)
+
+SELECT create_elabel('edge_graph', 'person.employee.engineer');
+NOTICE:  graph "edge_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT edge_build(1::int8, graph.id, label.id, 0::smallint,vertex_in('{}'), vertex_in('{}'),'{"name": "Alice", "age": 30}'::gtype)
+FROM np_edge_label_26 label, np_graph graph
+WHERE graph.name = 'edge_graph'
+  AND label.ltree @ 'person';
+                                                               edge_build                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ {"id": 1, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person", "properties": {"age": 30, "name": "Alice"}}
+ {"id": 1, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person.employee.engineer", "properties": {"age": 30, "name": "Alice"}}
+(2 rows)
+

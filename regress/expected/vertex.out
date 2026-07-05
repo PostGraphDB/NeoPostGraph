@@ -117,13 +117,13 @@ NOTICE:  graph "vertex_graph" has been created
 (1 row)
 
 SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
- id |     name     | namespace |   vertex_labels    |     vertex_id_seq      
-----+--------------+-----------+--------------------+------------------------
- 21 | vertex_graph | public    | np_vertex_label_21 | vertex_label_id_seq_21
+ id |     name     | namespace |   vertex_labels    |     vertex_id_seq      |   edge_labels    |     edge_id_seq      
+----+--------------+-----------+--------------------+------------------------+------------------+----------------------
+ 21 | vertex_graph | public    | np_vertex_label_21 | vertex_label_id_seq_21 | np_edge_label_21 | edge_label_id_seq_21
 (1 row)
 
 select * FROM np_vertex_label_21;
- id |  ltree   |   vertex_tbl   
+ id |  ltree   |      tbl       
 ----+----------+----------------
   1 | _        | np_vertex_21_1
   2 | _.person | np_vertex_21_2

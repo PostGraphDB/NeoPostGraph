@@ -35,7 +35,7 @@
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq);
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq);
 
 PG_FUNCTION_INFO_V1(create_graph);
 Datum create_graph(PG_FUNCTION_ARGS)
@@ -72,13 +72,24 @@ Datum create_graph(PG_FUNCTION_ARGS)
 
     int graph_id = DatumGetInt32(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(get_relname_relid("np_graph_id_seq", np_namespace_id()))));
 
-    Oid vertex_id_seq = create_vlabel_sequence(graph_id, get_namespace_name(namespace));
-
-    Oid vertex_label = create_vertex_label_metadata_table(graph_id);
-    create_vertex_label_metadata_btree_index(graph_id);
-    create_vertex_label_metadata_gist_index(graph_id);
+    // vertex labels setup
+    Oid vertex_id_seq = create_label_sequence(psprintf("vertex_label_id_seq_%d",graph_id), get_namespace_name(namespace));
+    char *vertex_meta_tbl = psprintf("np_vertex_label_%d", graph_id);
+    Oid vertex_label = create_label_metadata_table(psprintf(vertex_meta_tbl));
+    create_metadata_btree_index(vertex_meta_tbl);
+    create_metadata_gist_index(vertex_meta_tbl);
     create_default_vlabel(graph_id, vertex_id_seq, namespace);
-    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq);
+
+    // edge labels setup
+    Oid edge_id_seq = create_label_sequence(psprintf("edge_label_id_seq_%d", graph_id), get_namespace_name(namespace));
+    char *edge_meta_tbl = psprintf("np_edge_label_%d", graph_id);
+    Oid edge_label = create_label_metadata_table(edge_meta_tbl);
+    create_metadata_btree_index(edge_meta_tbl);
+    create_metadata_gist_index(edge_meta_tbl);
+    create_default_elabel(graph_id, edge_id_seq, namespace);
+ 
+
+    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq);
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
@@ -86,18 +97,20 @@ Datum create_graph(PG_FUNCTION_ARGS)
 }
 
 // INSERT INTO postgraph.np_graph VALUES (id, graph_name, namespace, vertex_id_seq)
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq)
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq)
 {
     Relation rel = table_open(np_graph_relation_id(), RowExclusiveLock);
 
-    Datum values[5] = {
+    Datum values[7] = {
         Int32GetDatum(graph_id),
         NameGetDatum(graph_name),
         ObjectIdGetDatum(namespace),
         ObjectIdGetDatum(vertex_label),
-        ObjectIdGetDatum(vertex_id_seq)
+        ObjectIdGetDatum(vertex_id_seq),
+        ObjectIdGetDatum(edge_label),
+        ObjectIdGetDatum(edge_id_seq)
     };
-    bool nulls[5] = { false, false, false, false, false };
+    bool nulls[7] = { false, false, false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
