@@ -63,15 +63,16 @@ typedef struct graph_id_label_id_cache_key
     int label_id;
 } graph_id_label_id_cache_key;
 
-typedef struct vertex_label_graph_id_id_cache_entry
+typedef struct label_graphid_id_cache_entry
 {
     graph_id_label_id_cache_key key;
-    vertex_label_cache_data data;
-} vertex_label_graph_id_id_cache_entry;
+    label_cache_data data;
+} label_graphid_id_cache_entry;
 
 // np_graph.name
 static HTAB *vertex_label_graph_id_id_cache_hash = NULL;
-static ScanKeyData vertex_label_scan_keys[1];
+static HTAB *edge_label_graph_id_id_cache_hash = NULL;
+static ScanKeyData label_scan_keys[1];
 
 typedef struct graph_label_dict_cache_key
 {
@@ -113,8 +114,8 @@ static void create_label_caches(void);
 static void create_vertex_label_cache(void);
 static void invalidate_label_caches(Datum arg, int cache_id, uint32 hash_value);
 static void flush_vertex_label_cache(void);
-static vertex_label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key);
-static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
+static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key);
+static void fill_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
 
 
 static void initialize_dict_caches(void);
@@ -219,7 +220,7 @@ static void initialize_graph_caches(void)
 
 static void initialize_label_caches(void)
 {
-    np_cache_scan_key_init(&vertex_label_scan_keys[0], 1, F_INT4EQ);
+    np_cache_scan_key_init(&label_scan_keys[0], 1, F_INT4EQ);
 
     create_label_caches();
 
@@ -266,7 +267,7 @@ static void create_label_caches(void)
      * XXX: Setup to handle multiple caches
      */
     create_vertex_label_cache();
-
+    create_edge_label_cache();
 }
 
 static void create_dict_caches(void)
@@ -297,6 +298,24 @@ static void create_graph_name_namespace_cache(void)
     graph_name_namespace_cache_hash = ShmemInitHash("np_graph (name) cache", 16, 1000, &hash_ctl,
 			     HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
 }
+
+static void create_edge_label_cache(void)
+{
+    HASHCTL hash_ctl;
+
+    MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize = sizeof(NameData);
+    hash_ctl.entrysize = sizeof(graph_name_namespace_cache_entry);
+    hash_ctl.match = graph_label_hash_compare;
+
+    /*
+     * Please see the comment of hash_create() for the nelem value 16 here.
+     * HASH_BLOBS flag is set because the key for this hash is fixed-size.
+     */
+    edge_label_graph_id_id_cache_hash = ShmemInitHash("np_graph (name) cache", 16, 1000, &hash_ctl,
+                 HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
+}
+
 
 static void create_vertex_label_cache(void)
 {
@@ -377,7 +396,7 @@ static void flush_vertex_label_cache(void)
     hash_seq_init(&hash_seq, vertex_label_graph_id_id_cache_hash);
     for (;;)
     {
-        vertex_label_graph_id_id_cache_entry *entry = hash_seq_search(&hash_seq);
+        label_graphid_id_cache_entry *entry = hash_seq_search(&hash_seq);
         if (!entry)
             break;
 
@@ -465,31 +484,35 @@ static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple,
     cache_data->vertex_labels = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
     // np_graph.vertex_id_seq
     cache_data->vertex_id_seq = DatumGetObjectId(heap_getattr(tuple, 5, tuple_desc, &is_null));
+    // np_graph.edge_labels
+    cache_data->edge_labels = DatumGetObjectId(heap_getattr(tuple, 6, tuple_desc, &is_null));
+    // np_graph.edge_id_seq
+    cache_data->edge_id_seq = DatumGetObjectId(heap_getattr(tuple, 7, tuple_desc, &is_null));
 }
 
-const vertex_label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id)
+const label_cache_data *search_edge_label_graph_id_label_id_cache(int graph_id, int label_id)
 {
     initialize_caches();
 
     graph_id_label_id_cache_key key = { .graph_id = graph_id, .label_id = label_id };
 
-    vertex_label_graph_id_id_cache_entry *entry;
-    if (entry = hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_FIND, NULL))
+    label_graphid_id_cache_entry *entry;
+    if (entry = hash_search(edge_label_graph_id_id_cache_hash, &key, HASH_FIND, NULL))
         return &entry->data;
 
-    return search_vertex_label_cache_miss(&key);
+    return search_edge_label_cache_miss(&key);
 }
 
-static vertex_label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key)
+static label_cache_data *search_edge_label_cache_miss(graph_id_label_id_cache_key *key)
 {
     // setup scan keys
     ScanKeyData scan_keys[1];
-    memcpy(scan_keys, vertex_label_scan_keys, sizeof(vertex_label_scan_keys));
+    memcpy(scan_keys, label_scan_keys, sizeof(vertex_label_scan_keys));
     scan_keys[0].sk_argument = ObjectIdGetDatum(key->label_id);
 
     // open graph catalog
-    Relation np_graph = table_open(np_relation_id(psprintf("np_vertex_label_%d", key->graph_id), "table"), AccessShareLock);
-    SysScanDesc scan_desc = systable_beginscan(np_graph, np_relation_id(psprintf("np_vertex_label_graph_id_id_index_%d", key->graph_id), "index"), true, NULL, 1, scan_keys);
+    Relation np_graph = table_open(np_relation_id(psprintf("np_edge_label_%d", key->graph_id), "table"), AccessShareLock);
+    SysScanDesc scan_desc = systable_beginscan(np_graph, np_relation_id(psprintf("np_edge_label_%d_btree_idx", key->graph_id), "index"), true, NULL, 1, scan_keys);
 
     // get catalog record
     // don't need to loop over scan_desc because np_graph_name_namespace_index is UNIQUE
@@ -503,7 +526,7 @@ static vertex_label_cache_data *search_vertex_label_cache_miss(graph_id_label_id
     }
 
     // catalog entry exists add to cache
-    vertex_label_graph_id_id_cache_entry *entry = hash_search(graph_name_namespace_cache_hash, &key, HASH_ENTER, NULL);
+    label_graphid_id_cache_entry *entry = hash_search(edge_label_graph_id_id_cache_hash, &key, HASH_ENTER, NULL);
 
     // populate cache
     fill_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
@@ -515,7 +538,55 @@ static vertex_label_cache_data *search_vertex_label_cache_miss(graph_id_label_id
     return &entry->data;
 }
 
-static void fill_label_cache_data(vertex_label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc)
+const label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id)
+{
+    initialize_caches();
+
+    graph_id_label_id_cache_key key = { .graph_id = graph_id, .label_id = label_id };
+
+    label_graphid_id_cache_entry *entry;
+    if (entry = hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_FIND, NULL))
+        return &entry->data;
+
+    return search_vertex_label_cache_miss(&key);
+}
+
+static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key)
+{
+    // setup scan keys
+    ScanKeyData scan_keys[1];
+    memcpy(scan_keys, label_scan_keys, sizeof(vertex_label_scan_keys));
+    scan_keys[0].sk_argument = ObjectIdGetDatum(key->label_id);
+
+    // open graph catalog
+    Relation np_graph = table_open(np_relation_id(psprintf("np_vertex_label_%d", key->graph_id), "table"), AccessShareLock);
+    SysScanDesc scan_desc = systable_beginscan(np_graph, np_relation_id(psprintf("np_vertex_label_%d_btree_idx", key->graph_id), "index"), true, NULL, 1, scan_keys);
+
+    // get catalog record
+    // don't need to loop over scan_desc because np_graph_name_namespace_index is UNIQUE
+    HeapTuple tuple = systable_getnext(scan_desc);
+    if (!HeapTupleIsValid(tuple)) {
+        // catalog does not have record
+        systable_endscan(scan_desc);
+        table_close(np_graph, AccessShareLock);
+
+        return NULL;
+    }
+
+    // catalog entry exists add to cache
+    label_graphid_id_cache_entry *entry = hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_ENTER, NULL);
+
+    // populate cache
+    fill_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
+
+    // close catalog
+    systable_endscan(scan_desc);
+    table_close(np_graph, AccessShareLock);
+
+    return &entry->data;
+}
+
+static void fill_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc)
 {
     bool is_null;
     cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));

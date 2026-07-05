@@ -13,9 +13,6 @@
  * GNU General Public License for more details.
  */
 
-
-
-
 #include "postgres.h"
 
 #include <string.h>
@@ -33,28 +30,12 @@
 #include "utils/np_cache.h"
 #include "utils/gtype.h"
 #include "utils/dictionary.h"
+#include "utuils/edge.h"
 #include "utils/vertex.h"
 
 
-bool show_dictionary_keys = true;
-bool show_dictionary_nulls = false;
-
-void
-assign_show_dictionary_keys(bool newval, void *extra)
-{
-    show_dictionary_keys = newval;
-    ereport(LOG, errmsg("neopostgraph: show_dictionary_keys = %s", newval ? "true" : "false"));
-}
-
-void
-assign_show_dictionary_nulls(bool newval, void *extra)
-{
-    show_dictionary_nulls = newval;
-    ereport(LOG, errmsg("neopostgraph: show_dictionary_nulls = %s", newval ? "true" : "false"));
-}
-
-PG_FUNCTION_INFO_V1(vertex_in);
-Datum vertex_in(PG_FUNCTION_ARGS) {
+PG_FUNCTION_INFO_V1(edge_in);
+Datum edge_in(PG_FUNCTION_ARGS) {
     char *str = PG_GETARG_CSTRING(0);
     gtype_value *val = gtype_value_from_cstring(str, strlen(str));
 
@@ -64,63 +45,83 @@ Datum vertex_in(PG_FUNCTION_ARGS) {
 
     gtype *gt = gtype_value_to_gtype(val);
 
-    vertex *v = palloc(sizeof(vertex) + VARSIZE(gt));
-    v->id = 0;
-    v->dictionary_id = 0;
-    v->label_id = 0;
-    v->graph_id = 0;
+    edge *e = palloc(sizeof(edge) + VARSIZE(gt));
+    e->id = 0;
+    e->dictionary_id = 0;
+    e->label_id = 0;
+    e->graph_id = 0;
 
-    memcpy(&v->props, &gt->root, VARSIZE(gt));
+    memcpy(&e->props, &gt->root, VARSIZE(gt));
 
-    SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+    SET_VARSIZE(e, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
 
-    NP_RETURN_VERTEX(v);
+    NP_RETURN_EDGE(e);
 }
 
-PG_FUNCTION_INFO_V1(vertex_build);
-Datum vertex_build(PG_FUNCTION_ARGS) {
-    gtype *gt = NP_GET_ARG_GTYPE_P(4);
+PG_FUNCTION_INFO_V1(edge_build);
+Datum edge_build(PG_FUNCTION_ARGS) {
+    gtype *gt = NP_GET_ARG_GTYPE_P(6);
+    vertex *start_vertex = NP_GET_ARG_VERTEX(3);
+    vertex *end_vertex = NP_GET_ARG_VERTEX(4);
 
-    vertex *v = palloc(sizeof(vertex) + VARSIZE(gt));
 
-    v->id = PG_GETARG_INT64(0);
-    v->graph_id = PG_GETARG_INT32(1);
-    v->label_id = PG_GETARG_INT32(2);
-    v->dictionary_id = PG_GETARG_INT16(3);
+    edge *e = palloc(sizeof(edge) + VARSIZE(gt));
 
-    memcpy(&v->props, &gt->root, VARSIZE(gt));
+    e->id = PG_GETARG_INT64(0);
+    e->graph_id = PG_GETARG_INT32(1);
+    e->label_id = PG_GETARG_INT32(2);
+    e->dictionary_id = PG_GETARG_INT16(5);
 
-    SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+    e->start_id = start_vertex->id;
+    e->start_label = start_vertex->label;
+    e->end_id = end_vertex->id;
+    e->end_label = end_vertex->label;
 
-    NP_RETURN_VERTEX(v);
+    memcpy(&e->props, &gt->root, VARSIZE(gt));
+
+    SET_VARSIZE(e, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+
+    NP_RETURN_EDGE(e);
 }
 
 PG_FUNCTION_INFO_V1(ltree_out);
 
-PG_FUNCTION_INFO_V1(vertex_out);
-Datum vertex_out(PG_FUNCTION_ARGS) {
-    vertex *v = NP_GET_ARG_VERTEX(0);
+PG_FUNCTION_INFO_V1(edge_out);
+Datum edge_out(PG_FUNCTION_ARGS) {
+    edge *e = NP_GET_ARG_EDGE(0);
     StringInfoData *buffer = makeStringInfo();
 
     // id
     appendStringInfoString(buffer, "{\"id\": ");
-    appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(v->id))));
+    appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(e->id))));
+
+    // start id
+    appendStringInfoString(buffer, ", \"start_vertex\": (");
+    appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int4out, Int64GetDatum(e->start_label))));
+     appendStringInfoString(buffer, ",");
+    appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(e->start_id))));
+
+    appendStringInfoString(buffer, ") \"edge_vertex\": (");
+    appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(e->end_label))));
+   appendStringInfoString(buffer, ",");
+   appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(e->end_id))));
+
 
     // label
-    appendStringInfoString(buffer, ", \"label\": \"");
+    appendStringInfoString(buffer, "), \"label\": \"");
     if (v->graph_id != 0 && v->label_id != 0) {
-        label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
+        label_cache_data *cache = search_edge_label_graph_id_label_id_cache(v->graph_id, v->label_id);
         appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(cache->label)) + 2));
     }
 
     // properties
     appendStringInfoString(buffer, "\", \"properties\": ");
 
-    if (v->dictionary_id != 0 && show_dictionary_keys) {
+    if (e->dictionary_id != 0 && show_dictionary_keys) {
         appendStringInfoString(buffer, "{");
 
-        const vertex_dictionary_cache_data *dictionary_cache =
-            search_vertex_dictionary_cache(v->graph_id, v->label_id, v->dictionary_id);
+        const edge_dictionary_cache_data *dictionary_cache =
+            search_vertex_dictionary_cache(e->graph_id, e->label_id, e->dictionary_id);
 
         gtype_iterator *it = gtype_iterator_init(&v->props);
         gtype_iterator *dict_it = gtype_iterator_init(&dictionary_cache->dict->array);
@@ -174,22 +175,22 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
         }
         appendStringInfoString(buffer, "}");
     } else {
-        gtype_to_cstring(buffer, &v->props, 0);
+        gtype_to_cstring(buffer, &e->props, 0);
     }
     appendStringInfoString(buffer, "}");
 
     PG_RETURN_CSTRING(buffer->data);
 }
-
-PG_FUNCTION_INFO_V1(vertex_set_dictionary);
-Datum vertex_set_dictionary(PG_FUNCTION_ARGS) {
-    vertex *v = NP_GET_ARG_VERTEX(0);
+/*
+PG_FUNCTION_INFO_V1(edge_set_dictionary);
+Datum edge_set_dictionary(PG_FUNCTION_ARGS) {
+    edge *e = NP_GET_ARG_EDGE(0);
     int dictionary_id = PG_GETARG_INT32(1);
 
-    const vertex_dictionary_cache_data *dictionary_cache =
-        search_vertex_dictionary_cache(v->graph_id, v->label_id, dictionary_id);
+    const edge_dictionary_cache_data *dictionary_cache =
+        search_edge_dictionary_cache(v->graph_id, v->label_id, dictionary_id);
 
-    if (!dictionary_cache) NP_RETURN_VERTEX(v);
+    if (!dictionary_cache) NP_RETURN_EDGE(v);
 
     if (v->dictionary_id != 0)
         ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -279,20 +280,20 @@ next_key_extra:
     result.res = push_gtype_value(&result.parse_state, WGT_END_ARRAY, NULL);
     gtype *props = gtype_value_to_gtype(result.res);
 
-    vertex *return_v = palloc(sizeof(vertex) + VARSIZE(props));
+    edge *return_e = palloc(sizeof(edge) + VARSIZE(props));
 
-    return_v->id = v->id;
-    return_v->graph_id = v->graph_id;
-    return_v->label_id = v->label_id;
-    return_v->dictionary_id = dictionary_id;
+    return_e->id = e->id;
+    return_e->graph_id = e->graph_id;
+    return_e->label_id = e->label_id;
+    return_e->dictionary_id = dictionary_id;
 
-    memcpy(&return_v->props, &props->root, VARSIZE(props));
+    memcpy(&return_e->props, &props->root, VARSIZE(props));
 
     SET_VARSIZE(return_v, VARSIZE(props) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
 
     NP_RETURN_VERTEX(return_v);
 }
-
+*/
 
 /*
 PG_FUNCTION_INFO_V1(vertex_insert);

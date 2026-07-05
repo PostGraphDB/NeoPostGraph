@@ -25,7 +25,8 @@ OBJS = src/backend/neopostgraph.o \
        src/backend/utils/adt/gtype_ext.o \
        src/backend/utils/adt/gtype_parser.o \
        src/backend/utils/adt/gtype_util.o \
-       src/backend/utils/adt/vertex.o \
+       src/backend/utils/adt/edge.o \
+	   src/backend/utils/adt/vertex.o \
 	   src/backend/utils/np_cache.o
 
 EXTENSION = neopostgraph
@@ -37,6 +38,7 @@ REGRESS = graph \
           gtype \
           dictionary \
           vertex \
+		  edge \
           neopostgraph
 
 srcdir=`pwd`
