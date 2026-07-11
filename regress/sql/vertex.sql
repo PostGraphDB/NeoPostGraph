@@ -54,6 +54,13 @@ SELECT create_vlabel('vertex_graph', 'person');
 SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
 select * FROM np_vertex_label_21;
 
+select * from np_vertex_21_2_linked_list_meta;
+
+\d+ np_vertex_21_2
+\d+ np_vertex_21_2_phys_map
+\d+ np_vertex_21_2_linked_list_meta
+\d+ np_vertex_21_2_arraylist
+ 
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'

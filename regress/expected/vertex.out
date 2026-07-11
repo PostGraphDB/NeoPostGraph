@@ -123,12 +123,55 @@ SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
 (1 row)
 
 select * FROM np_vertex_label_21;
- id |  ltree   |      tbl       
-----+----------+----------------
-  1 | _        | np_vertex_21_1
-  2 | _.person | np_vertex_21_2
+ id |  ltree   |      tbl       |        phys_map         |        linked_list_meta         |        linked_list_seq         |        arraylist         
+----+----------+----------------+-------------------------+---------------------------------+--------------------------------+--------------------------
+  1 | _        | np_vertex_21_1 | np_vertex_21_1_phys_map | np_vertex_21_1_linked_list_meta | np_vertex_21_1_linked_list_seq | np_vertex_21_1_arraylist
+  2 | _.person | np_vertex_21_2 | np_vertex_21_2_phys_map | np_vertex_21_2_linked_list_meta | np_vertex_21_2_linked_list_seq | np_vertex_21_2_arraylist
 (2 rows)
 
+select * from np_vertex_21_2_linked_list_meta;
+ id |             tbl              | active 
+----+------------------------------+--------
+  1 | np_vertex_21_2_1_linked_list | t
+(1 row)
+
+\d+ np_vertex_21_2
+                              Table "public.np_vertex_21_2"
+ Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------+-----------+----------+---------+----------+--------------+-------------
+ id     | bigint |           | not null |         | plain    |              | 
+ vertex | vertex |           | not null |         | extended |              | 
+Not-null constraints:
+    "np_vertex_21_2_id_not_null" NOT NULL "id"
+    "np_vertex_21_2_vertex_not_null" NOT NULL "vertex"
+
+\d+ np_vertex_21_2_phys_map
+                            Table "public.np_vertex_21_2_phys_map"
+  Column   |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+----------+-----------+----------+---------+----------+--------------+-------------
+ v_itemptr | bytea(6) |           |          |         | extended |              | 
+ e_tbl_id  | oid      |           |          |         | plain    |              | 
+ e_itemptr | bytea(6) |           |          |         | extended |              | 
+
+\d+ np_vertex_21_2_linked_list_meta
+                      Table "public.np_vertex_21_2_linked_list_meta"
+ Column |   Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+----------+-----------+----------+---------+---------+--------------+-------------
+ id     | integer  |           |          |         | plain   |              | 
+ tbl    | regclass |           |          |         | plain   |              | 
+ active | boolean  |           |          |         | plain   |              | 
+
+\d+ np_vertex_21_2_arraylist
+                               Table "public.np_vertex_21_2_arraylist"
+    Column    |    Type     | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------------+-------------+-----------+----------+---------+----------+--------------+-------------
+ id           | bigint      |           |          |         | plain    |              | 
+ prev_table   | regclass(6) |           |          |         | plain    |              | 
+ prev_itemptr | bytea(6)    |           |          |         | extended |              | 
+ adj_list     | bytea       |           |          |         | extended |              | 
+ next_itemptr | bytea(6)    |           |          |         | extended |              | 
+
+ 
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'

@@ -17,17 +17,18 @@
 MODULE_big = neopostgraph
 
 OBJS = src/backend/neopostgraph.o \
+       src/backend/access/map.o \
        src/backend/catalog/np_catalog.o \
        src/backend/catalog/np_graph.o \
-	   src/backend/catalog/np_label.o \
-	   src/backend/utils/adt/dictionary.o \
+	src/backend/catalog/np_label.o \
+	src/backend/utils/adt/dictionary.o \
        src/backend/utils/adt/gtype.o \
        src/backend/utils/adt/gtype_ext.o \
        src/backend/utils/adt/gtype_parser.o \
        src/backend/utils/adt/gtype_util.o \
        src/backend/utils/adt/edge.o \
-	   src/backend/utils/adt/vertex.o \
-	   src/backend/utils/np_cache.o
+	src/backend/utils/adt/vertex.o \
+	src/backend/utils/np_cache.o
 
 EXTENSION = neopostgraph
 

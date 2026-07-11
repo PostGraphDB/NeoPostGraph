@@ -75,7 +75,7 @@ Datum create_graph(PG_FUNCTION_ARGS)
     // vertex labels setup
     Oid vertex_id_seq = create_label_sequence(psprintf("vertex_label_id_seq_%d",graph_id), get_namespace_name(namespace));
     char *vertex_meta_tbl = psprintf("np_vertex_label_%d", graph_id);
-    Oid vertex_label = create_label_metadata_table(psprintf(vertex_meta_tbl));
+    Oid vertex_label = create_vertex_label_metadata_table(psprintf(vertex_meta_tbl));
     create_metadata_btree_index(vertex_meta_tbl);
     create_metadata_gist_index(vertex_meta_tbl);
     create_default_vlabel(graph_id, vertex_id_seq, namespace);

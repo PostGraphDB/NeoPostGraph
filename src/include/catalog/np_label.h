@@ -30,8 +30,15 @@ extern Datum ltree_out(PG_FUNCTION_ARGS);
 
 Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace);
 Oid create_default_elabel(int graph_id, Oid vertex_id_seq, Oid namespace);
+int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta);
+
 void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq);
 Oid create_label_metadata_table(char *meta_tbl_name);
+Oid create_vertex_label_metadata_table(char *meta_tbl_name);
+Oid create_label_vertex_physical_mapping_table(char *meta_tbl_name, Oid namespace);
+Oid create_vertex_label_arraylist_table(char *meta_tbl_name, Oid namespace);
+
+
 void create_metadata_btree_index(char *tbl_name);
 void create_metadata_gist_index(char *tbl_name);
 

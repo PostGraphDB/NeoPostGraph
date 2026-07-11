@@ -174,6 +174,17 @@ RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
+--
+-- Table AM
+--
+CREATE OR REPLACE FUNCTION neopg_tableam_hash_handler(internal)
+RETURNS table_am_handler
+AS 'MODULE_PATHNAME', 'neopg_tableam_hash_handler'
+LANGUAGE C STRICT;
+
+CREATE ACCESS METHOD neopg_hash
+TYPE TABLE 
+HANDLER neopg_tableam_hash_handler;
 
 --
 -- catalog tables

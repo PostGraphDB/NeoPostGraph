@@ -60,6 +60,10 @@ PG_FUNCTION_INFO_V1(ltree_out);
 Datum text_array_to_lxtquery(ArrayType *label_array);
 Datum text_array_to_lxtquery_or(ArrayType *label_array);
 
+Oid create_linked_list_table_sequence(char *seq_name, char *namespace);
+Oid create_vertex_label_linked_list_metadata_table(char *tbl_name, Oid namespace);
+int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl);
+Oid create_vertex_label_linked_list_table(char *tbl_name, Oid namespace);
 
 int insert_label(char *table_name, Datum label,Oid label_id, Oid tbl);
 Oid create_edge_tables(int graph_id, int label_id, Oid namespace);
@@ -84,8 +88,17 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq)));
 
     Oid vertex_tbl = create_vertex_tables(graph_id, label_id, namespace);
+    Oid phys_map = create_label_vertex_physical_mapping_table(psprintf("np_vertex_%d_%d_phys_map", graph_id, label_id), namespace);
+    Oid arraylist = create_vertex_label_arraylist_table(psprintf("np_vertex_%d_%d_arraylist", graph_id, label_id), namespace);
 
-    insert_label(psprintf("np_vertex_label_%d", graph_id), DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, vertex_tbl);
+    //linked list
+    Oid ll_seq = create_linked_list_table_sequence(psprintf("np_vertex_%d_%d_linked_list_seq", graph_id, label_id), "neopostgraph");    
+    Oid ll_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq)));
+    char *ll_meta_table = psprintf("np_vertex_%d_%d_linked_list_meta", graph_id, label_id);
+    Oid ll_meta = create_vertex_label_linked_list_metadata_table(ll_meta_table, namespace);
+    insert_vertex_ll_meta(ll_meta_table, namespace, ll_seq, ll_id);
+
+    insert_vertex_label(psprintf("np_vertex_label_%d", graph_id), DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, vertex_tbl, phys_map,arraylist,ll_seq, ll_meta);
 
     Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
@@ -135,14 +148,27 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
 
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->vertex_id_seq)));
     Oid vertex_tbl = create_vertex_tables(entry->id, label_id, namespace);
-    insert_label(
+    Oid phys_map = create_label_vertex_physical_mapping_table(psprintf("np_vertex_%d_%d_phys_map", entry->id, label_id), namespace);
+    Oid arraylist = create_vertex_label_arraylist_table(psprintf("np_vertex_%d_%d_arraylist", entry->id, label_id), namespace);
+    
+    // linked list
+    Oid ll_seq = create_linked_list_table_sequence(psprintf("np_vertex_%d_%d_linked_list_seq", entry->id, label_id), "neopostgraph");    
+    Oid ll_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq)));
+    char *ll_meta_table = psprintf("np_vertex_%d_%d_linked_list_meta", entry->id, label_id);
+    Oid ll_meta = create_vertex_label_linked_list_metadata_table(ll_meta_table, namespace);
+    Oid ll = create_vertex_label_linked_list_table(psprintf("np_vertex_%d_%d_%d_linked_list", entry->id, label_id, ll_id), namespace);
+    insert_vertex_ll_meta(ll_meta_table, namespace, ll, ll_id);
+
+    insert_vertex_label(
         psprintf("np_vertex_label_%d", entry->id),
         DirectFunctionCall2(ltree_addltree,
             DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
             PG_GETARG_DATUM(1)
         ),
         label_id,
-        vertex_tbl);
+        vertex_tbl,
+        phys_map,
+        arraylist, ll_seq, ll_meta);
 
     create_vertex_property_dictionary(entry->id, vertex_tbl);
     //create_vertex_tables(entry->id, label_id, namespace);
@@ -279,6 +305,24 @@ Oid create_edge_tables(int graph_id, int label_id, Oid namespace) {
     return get_relname_relid(psprintf("np_edge_%d_%d", graph_id, label_id), namespace);
 }
 
+Oid create_linked_list_table_sequence(char *seq_name, char *namespace)
+{
+    ParseState *pstate = make_parsestate(NULL);
+    pstate->p_sourcetext = "(generated CREATE SEQUENCE command)";
+
+    CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
+    seq_stmt->sequence = makeRangeVar(namespace, seq_name, -1);
+    seq_stmt->options = NIL;
+    seq_stmt->ownerId = InvalidOid;
+    seq_stmt->for_identity = false;
+    seq_stmt->if_not_exists = false;
+
+    DefineSequence(pstate, seq_stmt);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(seq_name, get_namespace_oid(namespace, false));
+}
 
 
 Oid create_label_sequence(char *seq_name, char *namespace)
@@ -301,7 +345,46 @@ Oid create_label_sequence(char *seq_name, char *namespace)
 }
 
 
-//TODO: Call the function that implicitly starts a transaction, if there isn't one already
+int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl)
+{
+    Relation rel = table_open(get_relname_relid(table_name, namespace), RowExclusiveLock);
+
+    Datum values[3] = {
+        ObjectIdGetDatum(tbl),
+        Int32GetDatum(ll_seq),
+        BoolGetDatum(true)
+    };
+    bool nulls[3] = { false, false, false };
+
+    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+
+    table_close(rel, RowExclusiveLock);
+
+    CommandCounterIncrement();
+}
+
+int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta)
+{
+    Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
+
+    Datum values[7] = {
+        ObjectIdGetDatum(label_id),
+        label,
+        ObjectIdGetDatum(tbl),
+        ObjectIdGetDatum(phys_map),
+        ObjectIdGetDatum(ll_meta),
+        ObjectIdGetDatum(ll_seq),
+        ObjectIdGetDatum(arraylist)
+    };
+    bool nulls[7] = { false, false, false, false, false };
+
+    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+
+    table_close(rel, RowExclusiveLock);
+
+    CommandCounterIncrement();
+}
+
 int insert_label(char *table_name, Datum label,Oid label_id, Oid tbl)
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
@@ -565,6 +648,257 @@ text_array_to_lxtquery_or(ArrayType *label_array)
     return result;
 }
 
+
+
+Oid
+create_vertex_label_linked_list_table(char *tbl_name, Oid namespace)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+    
+    //create_stmt->tableElts = NIL;
+    create_stmt->tableElts = list_make1(makeColumnDef("id", INT8OID, -1, InvalidOid));
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("edge_lid", INT4OID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("dir", BYTEAOID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("other_id", INT8OID, -1, InvalidOid)
+    );    
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("other_lid", INT4OID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("next_tbl", REGCLASSOID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("next_itemptr", BYTEAOID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("prev_tbl", REGCLASSOID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts,
+        makeColumnDef("prev_itemptr", BYTEAOID, -1, InvalidOid)
+    );
+    create_stmt->accessMethod = "neopg_hash";
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    /* Wrap and execute */
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated arraylist CREATE TABLE)",
+                   false, PROCESS_UTILITY_SUBCOMMAND, NULL, NULL,
+                   None_Receiver, NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
+}
+
+Oid
+create_vertex_label_linked_list_metadata_table(char *tbl_name, Oid namespace)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+
+    /* Fixed columns + one variable column (bytea for adjacency list) */
+    create_stmt->tableElts = list_make3(
+        makeColumnDef("id", INT4OID, -1, InvalidOid),
+        makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid),
+        makeColumnDef("active", BOOLOID, -1, InvalidOid)
+    );
+
+    create_stmt->accessMethod = NULL;
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    /* Wrap and execute */
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated arraylist CREATE TABLE)",
+                   false, PROCESS_UTILITY_SUBCOMMAND, NULL, NULL,
+                   None_Receiver, NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
+}
+
+Oid
+create_vertex_label_arraylist_table(char *tbl_name, Oid namespace)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+
+    /* Fixed columns + one variable column (bytea for adjacency list) */
+    create_stmt->tableElts = list_make5(
+        makeColumnDef("id", INT8OID, -1, InvalidOid),
+        makeColumnDef("prev_table", REGCLASSOID, 6, InvalidOid),
+        makeColumnDef("prev_itemptr", BYTEAOID, 6, InvalidOid),
+        makeColumnDef("adj_list", BYTEAOID, -1, InvalidOid),
+        makeColumnDef("next_itemptr", BYTEAOID, 6, InvalidOid)
+    );
+
+    create_stmt->accessMethod = NULL;
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    /* Wrap and execute */
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated arraylist CREATE TABLE)",
+                   false, PROCESS_UTILITY_SUBCOMMAND, NULL, NULL,
+                   None_Receiver, NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
+}
+
+
+Oid create_label_vertex_physical_mapping_table(char *tbl_name, Oid namespace)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+
+    create_stmt->tableElts = list_make3(makeColumnDef("v_itemptr", BYTEAOID, 6, InvalidOid),
+                                        makeColumnDef("e_tbl_id", OIDOID, -1, InvalidOid),
+                                        makeColumnDef("e_itemptr", BYTEAOID, 6, InvalidOid));
+    create_stmt->accessMethod = "neopg_hash";
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
+}
+
+
+Oid create_vertex_label_metadata_table(char *meta_tbl_name)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+
+    create_stmt->relation = makeRangeVar("neopostgraph", meta_tbl_name, -1);
+
+    
+    ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
+    ltree->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
+    vertex_tbl->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
+    phys_map->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *linked_list_meta = makeColumnDef("linked_list_meta", REGCLASSOID, -1, InvalidOid);
+    linked_list_meta->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *linked_list_seq = makeColumnDef("linked_list_seq", REGCLASSOID, -1, InvalidOid);
+    linked_list_seq->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *arraylist = makeColumnDef("arraylist", REGCLASSOID, -1, InvalidOid);
+    arraylist->constraints = list_make1(build_not_null_constraint());
+
+
+
+    List *tableElts = list_make5(id, ltree, vertex_tbl, phys_map, linked_list_meta);
+    tableElts = lappend(tableElts, linked_list_seq);
+    tableElts = lappend(tableElts, arraylist);
+    create_stmt->tableElts = tableElts;
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+    
+    CommandCounterIncrement();
+
+    return get_relname_relid(meta_tbl_name, get_namespace_oid("neopostgraph", false));
+}
+
 Oid create_label_metadata_table(char *meta_tbl_name)
 {
     CreateStmt *create_stmt;
@@ -574,6 +908,7 @@ Oid create_label_metadata_table(char *meta_tbl_name)
 
     create_stmt->relation = makeRangeVar("neopostgraph", meta_tbl_name, -1);
 
+    
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
@@ -602,6 +937,7 @@ Oid create_label_metadata_table(char *meta_tbl_name)
                    PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
                    NULL);
     
+    CommandCounterIncrement();
 
     return get_relname_relid(meta_tbl_name, get_namespace_oid("neopostgraph", false));
 }
@@ -648,6 +984,8 @@ void create_metadata_btree_index(char *tbl_name)
 
     ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
                    PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
+
+    CommandCounterIncrement();
 }
 
 void create_metadata_gist_index(char *tbl_name)

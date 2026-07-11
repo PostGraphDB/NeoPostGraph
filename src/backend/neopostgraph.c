@@ -16,11 +16,13 @@
 
 #include "postgres.h"
 
+#include "access/tableam.h" 
 #include "fmgr.h"
 #include "utils/guc.h"
 #include "utils/elog.h"
 
 #include "utils/vertex.h"
+#include "access/map.h"
 
 PG_MODULE_MAGIC;
 
