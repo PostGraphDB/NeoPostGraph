@@ -59,6 +59,7 @@ select * from np_vertex_21_2_linked_list_meta;
 \d+ np_vertex_21_2
 \d+ np_vertex_21_2_phys_map
 \d+ np_vertex_21_2_linked_list_meta
+\d+ np_vertex_21_2_1_linked_list
 \d+ np_vertex_21_2_arraylist
  
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
@@ -117,6 +118,27 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
 
 \dt public
+
+select insert_vertex(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
+select insert_vertex(vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
+
+select insert_edge(
+  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      0::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+
+\d+ np_edge_21_1
+
+SELECT * FROM public.np_edge_21_1;
+
+
 SELECT * FROM public.np_vertex_21_1;
+
+
 
 RESET neopostgraph.show_dictionary_keys;

@@ -177,14 +177,15 @@ AS 'MODULE_PATHNAME';
 --
 -- Table AM
 --
-CREATE OR REPLACE FUNCTION neopg_tableam_hash_handler(internal)
+-- XXX: Doing double duty right now, going to have to split in two eventually
+CREATE OR REPLACE FUNCTION np_mutable_handler(internal)
 RETURNS table_am_handler
-AS 'MODULE_PATHNAME', 'neopg_tableam_hash_handler'
+AS 'MODULE_PATHNAME', 'np_mutable_handler'
 LANGUAGE C STRICT;
 
-CREATE ACCESS METHOD neopg_hash
+CREATE ACCESS METHOD np_mutable
 TYPE TABLE 
-HANDLER neopg_tableam_hash_handler;
+HANDLER np_mutable_handler;
 
 --
 -- catalog tables
@@ -249,3 +250,14 @@ RETURNS vertex
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+
+CREATE FUNCTION insert_vertex(vertex)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+
+CREATE FUNCTION insert_edge(vertex, vertex, edge)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';

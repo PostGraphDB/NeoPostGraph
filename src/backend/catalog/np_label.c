@@ -76,6 +76,7 @@ Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
 
     insert_label(psprintf("np_edge_label_%d", graph_id), DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, edge_tbl);
 
+    //TODO
     //Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     //create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
 
@@ -686,7 +687,7 @@ create_vertex_label_linked_list_table(char *tbl_name, Oid namespace)
     create_stmt->tableElts = lappend(create_stmt->tableElts,
         makeColumnDef("prev_itemptr", BYTEAOID, -1, InvalidOid)
     );
-    create_stmt->accessMethod = "neopg_hash";
+    create_stmt->accessMethod = "np_mutable";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
@@ -816,7 +817,7 @@ Oid create_label_vertex_physical_mapping_table(char *tbl_name, Oid namespace)
     create_stmt->tableElts = list_make3(makeColumnDef("v_itemptr", BYTEAOID, 6, InvalidOid),
                                         makeColumnDef("e_tbl_id", OIDOID, -1, InvalidOid),
                                         makeColumnDef("e_itemptr", BYTEAOID, 6, InvalidOid));
-    create_stmt->accessMethod = "neopg_hash";
+    create_stmt->accessMethod = "np_mutable";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
@@ -851,7 +852,6 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     create_stmt = makeNode(CreateStmt);
 
     create_stmt->relation = makeRangeVar("neopostgraph", meta_tbl_name, -1);
-
     
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
@@ -867,8 +867,6 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     linked_list_seq->constraints = list_make1(build_not_null_constraint());
     ColumnDef *arraylist = makeColumnDef("arraylist", REGCLASSOID, -1, InvalidOid);
     arraylist->constraints = list_make1(build_not_null_constraint());
-
-
 
     List *tableElts = list_make5(id, ltree, vertex_tbl, phys_map, linked_list_meta);
     tableElts = lappend(tableElts, linked_list_seq);
@@ -968,7 +966,7 @@ void create_metadata_btree_index(char *tbl_name)
     create_stmt->unique = true;
     create_stmt->primary = true;
     create_stmt->isconstraint = true;
-    create_stmt->concurrent = false; // Index and Table start empty
+    create_stmt->concurrent = false;
     create_stmt->deferrable = false;
     create_stmt->initdeferred = false;
     create_stmt->if_not_exists = false;
@@ -1014,7 +1012,7 @@ void create_metadata_gist_index(char *tbl_name)
     create_stmt->unique = false;
     create_stmt->primary = false;
     create_stmt->isconstraint = false;
-    create_stmt->concurrent = false; // Index and Table start empty
+    create_stmt->concurrent = false;
     create_stmt->deferrable = false;
     create_stmt->initdeferred = false;
     create_stmt->if_not_exists = false;

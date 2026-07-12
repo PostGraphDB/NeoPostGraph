@@ -40,6 +40,10 @@ typedef struct label_cache_data
     int graph_id;
     ltree *label;
     Oid vertex_tbl;
+    Oid     phys_map;
+    Oid     arraylist;
+    Oid     linked_list_meta;
+    Oid     linked_list_seq;
 } label_cache_data;
 
 typedef struct vertex_dictionary_cache_data

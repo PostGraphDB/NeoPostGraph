@@ -53,6 +53,9 @@ SELECT create_elabel('edge_graph', 'person');
 SELECT * FROM np_graph graph WHERE graph.name = 'edge_graph';
 select * FROM np_edge_label_26;
 
+\d+ np_edge_label_26
+\d+ np_edge_26_2
+
 SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype)
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'

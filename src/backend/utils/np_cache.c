@@ -115,7 +115,9 @@ static void create_vertex_label_cache(void);
 static void invalidate_label_caches(Datum arg, int cache_id, uint32 hash_value);
 static void flush_vertex_label_cache(void);
 static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key);
-static void fill_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
+static void fill_vertex_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
+static void fill_edge_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
+
 static void create_edge_label_cache(void);
 static label_cache_data *search_edge_label_cache_miss(graph_id_label_id_cache_key *key);
 
@@ -300,39 +302,34 @@ static void create_graph_name_namespace_cache(void)
 			     HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
 }
 
-static void create_edge_label_cache(void)
-{
-    HASHCTL hash_ctl;
-
-    MemSet(&hash_ctl, 0, sizeof(hash_ctl));
-    hash_ctl.keysize = sizeof(NameData);
-    hash_ctl.entrysize = sizeof(graph_name_namespace_cache_entry);
-    hash_ctl.match = graph_label_hash_compare;
-
-    /*
-     * Please see the comment of hash_create() for the nelem value 16 here.
-     * HASH_BLOBS flag is set because the key for this hash is fixed-size.
-     */
-    edge_label_graph_id_id_cache_hash = ShmemInitHash("np_graph (name) cache", 16, 1000, &hash_ctl,
-                 HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
-}
-
-
 static void create_vertex_label_cache(void)
 {
     HASHCTL hash_ctl;
 
     MemSet(&hash_ctl, 0, sizeof(hash_ctl));
-    hash_ctl.keysize = sizeof(NameData);
-    hash_ctl.entrysize = sizeof(graph_name_namespace_cache_entry);
-    hash_ctl.match = graph_label_hash_compare;
+    hash_ctl.keysize   = sizeof(graph_id_label_id_cache_key);
+    hash_ctl.entrysize = sizeof(label_graphid_id_cache_entry);
+    hash_ctl.match     = graph_label_hash_compare;
 
-    /*
-     * Please see the comment of hash_create() for the nelem value 16 here.
-     * HASH_BLOBS flag is set because the key for this hash is fixed-size.
-     */
-    vertex_label_graph_id_id_cache_hash = ShmemInitHash("np_graph (name) cache", 16, 1000, &hash_ctl,
-                 HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
+    vertex_label_graph_id_id_cache_hash =
+        ShmemInitHash("vertex label (graph_id, label_id) cache",
+                      16, 1000, &hash_ctl,
+                      HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
+}
+
+static void create_edge_label_cache(void)
+{
+    HASHCTL hash_ctl;
+
+    MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize   = sizeof(graph_id_label_id_cache_key);
+    hash_ctl.entrysize = sizeof(label_graphid_id_cache_entry);
+    hash_ctl.match     = graph_label_hash_compare;
+
+    edge_label_graph_id_id_cache_hash =
+        ShmemInitHash("edge label (graph_id, label_id) cache",
+                      16, 1000, &hash_ctl,
+                      HASH_ELEM | HASH_BLOBS | HASH_COMPARE);
 }
 
 static void create_dictionary_cache(void)
@@ -530,7 +527,7 @@ static label_cache_data *search_edge_label_cache_miss(graph_id_label_id_cache_ke
     label_graphid_id_cache_entry *entry = hash_search(edge_label_graph_id_id_cache_hash, &key, HASH_ENTER, NULL);
 
     // populate cache
-    fill_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
+    fill_edge_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
 
     // close catalog
     systable_endscan(scan_desc);
@@ -578,7 +575,7 @@ static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_
     label_graphid_id_cache_entry *entry = hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_ENTER, NULL);
 
     // populate cache
-    fill_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
+    fill_vertex_label_cache_data(&entry->data, tuple, RelationGetDescr(np_graph));
 
     // close catalog
     systable_endscan(scan_desc);
@@ -587,12 +584,36 @@ static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_
     return &entry->data;
 }
 
-static void fill_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc)
+static void
+fill_vertex_label_cache_data(label_cache_data *cache_data,
+                             HeapTuple tuple,
+                             TupleDesc tuple_desc)
 {
     bool is_null;
-    cache_data->id = DatumGetObjectId(heap_getattr(tuple, 1, tuple_desc, &is_null));
-    cache_data->label = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
+
+    cache_data->id         = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
+    cache_data->label      = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
     cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    cache_data->phys_map         = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
+    cache_data->linked_list_meta = DatumGetObjectId(heap_getattr(tuple, 5, tuple_desc, &is_null));
+    cache_data->linked_list_seq  = DatumGetObjectId(heap_getattr(tuple, 6, tuple_desc, &is_null));
+    cache_data->arraylist        = DatumGetObjectId(heap_getattr(tuple, 7, tuple_desc, &is_null));
+}
+
+static void
+fill_edge_label_cache_data(label_cache_data *cache_data,
+                           HeapTuple tuple,
+                           TupleDesc tuple_desc)
+{
+    bool is_null;
+
+    cache_data->id         = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
+    cache_data->label      = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
+    cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    cache_data->phys_map         = InvalidOid;
+    cache_data->linked_list_meta = InvalidOid;
+    cache_data->linked_list_seq  = InvalidOid;
+    cache_data->arraylist        = InvalidOid;
 }
 
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id)

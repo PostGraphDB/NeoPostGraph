@@ -22,7 +22,7 @@
 #include "utils/elog.h"
 
 #include "utils/vertex.h"
-#include "access/map.h"
+#include "access/np_mutable.h"
 
 PG_MODULE_MAGIC;
 

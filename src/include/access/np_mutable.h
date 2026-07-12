@@ -40,9 +40,11 @@
 #include "utils/snapmgr.h"
 #include "commands/vacuum.h"
 
-extern const TableAmRoutine neopg_methods;
+extern const TableAmRoutine np_methods;
 
-void neopg_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
-void neopg_heap_insert(Relation relation, HeapTuple tup, CommandId cid, int options, BulkInsertState bistate);
+void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
+void np_heap_insert(Relation relation, HeapTuple tup, CommandId cid, int options, BulkInsertState bistate);
+void np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid);
+uint32 np_calculate_tuples_per_page(Size payload_size);
 
 #endif
