@@ -129,6 +129,30 @@ select * FROM np_edge_label_26;
   2 | _.person | np_edge_26_2
 (2 rows)
 
+\d+ np_edge_label_26
+                           Table "neopostgraph.np_edge_label_26"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+--------------+-------------
+ id     | integer  |           | not null |         | plain    |              | 
+ ltree  | ltree    |           | not null |         | extended |              | 
+ tbl    | regclass |           |          |         | plain    |              | 
+Indexes:
+    "np_edge_label_26_btree_idx" PRIMARY KEY, btree (id)
+    "np_edge_label_26_gist_idx" gist (ltree)
+Not-null constraints:
+    "np_edge_label_26_id_not_null" NOT NULL "id"
+    "np_edge_label_26_ltree_not_null" NOT NULL "ltree"
+
+\d+ np_edge_26_2
+                               Table "public.np_edge_26_2"
+ Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------+-----------+----------+---------+----------+--------------+-------------
+ id     | bigint |           | not null |         | plain    |              | 
+ edge   | edge   |           | not null |         | extended |              | 
+Not-null constraints:
+    "np_edge_26_2_id_not_null" NOT NULL "id"
+    "np_edge_26_2_edge_not_null" NOT NULL "edge"
+
 SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype)
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'

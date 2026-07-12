@@ -18,6 +18,10 @@
 #include <string.h>
 #include <assert.h>
 
+#include "access/xlog.h"
+#include "access/xloginsert.h"
+#include "access/heapam.h"
+#include "access/hio.h"
 #include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/table.h"

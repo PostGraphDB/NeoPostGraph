@@ -161,6 +161,20 @@ Not-null constraints:
  tbl    | regclass |           |          |         | plain   |              | 
  active | boolean  |           |          |         | plain   |              | 
 
+\d+ np_vertex_21_2_1_linked_list
+                           Table "public.np_vertex_21_2_1_linked_list"
+    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------------+----------+-----------+----------+---------+----------+--------------+-------------
+ id           | bigint   |           |          |         | plain    |              | 
+ edge_lid     | integer  |           |          |         | plain    |              | 
+ dir          | bytea    |           |          |         | extended |              | 
+ other_id     | bigint   |           |          |         | plain    |              | 
+ other_lid    | integer  |           |          |         | plain    |              | 
+ next_tbl     | regclass |           |          |         | plain    |              | 
+ next_itemptr | bytea    |           |          |         | extended |              | 
+ prev_tbl     | regclass |           |          |         | plain    |              | 
+ prev_itemptr | bytea    |           |          |         | extended |              | 
+
 \d+ np_vertex_21_2_arraylist
                                Table "public.np_vertex_21_2_arraylist"
     Column    |    Type     | Collation | Nullable | Default | Storage  | Stats target | Description 
@@ -335,9 +349,116 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice
 --------+------+------+-------
 (0 rows)
 
+select insert_vertex(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+select insert_vertex(vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+select insert_edge(
+  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      0::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+\d+ np_edge_21_1
+                               Table "public.np_edge_21_1"
+ Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------+-----------+----------+---------+----------+--------------+-------------
+ id     | bigint |           | not null |         | plain    |              | 
+ edge   | edge   |           | not null |         | extended |              | 
+Not-null constraints:
+    "np_edge_21_1_id_not_null" NOT NULL "id"
+    "np_edge_21_1_edge_not_null" NOT NULL "edge"
+
+SELECT * FROM public.np_edge_21_1;
+ id |                                         edge                                          
+----+---------------------------------------------------------------------------------------
+  0 | {"id": 0, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+(1 row)
+
+select rotate_active_linked_list_table('vertex_graph', 2);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+select insert_edge(
+  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      1::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+select * from np_vertex_21_2_linked_list_meta;
+ id |             tbl              | active 
+----+------------------------------+--------
+  1 | np_vertex_21_2_1_linked_list | f
+  2 | np_vertex_21_2_2_linked_list | t
+(2 rows)
+
+\d+ np_vertex_21_2_1_linked_list
+                           Table "public.np_vertex_21_2_1_linked_list"
+    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------------+----------+-----------+----------+---------+----------+--------------+-------------
+ id           | bigint   |           |          |         | plain    |              | 
+ edge_lid     | integer  |           |          |         | plain    |              | 
+ dir          | bytea    |           |          |         | extended |              | 
+ other_id     | bigint   |           |          |         | plain    |              | 
+ other_lid    | integer  |           |          |         | plain    |              | 
+ next_tbl     | regclass |           |          |         | plain    |              | 
+ next_itemptr | bytea    |           |          |         | extended |              | 
+ prev_tbl     | regclass |           |          |         | plain    |              | 
+ prev_itemptr | bytea    |           |          |         | extended |              | 
+
+\d+ np_vertex_21_2_2_linked_list
+                           Table "public.np_vertex_21_2_2_linked_list"
+    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------------+----------+-----------+----------+---------+----------+--------------+-------------
+ id           | bigint   |           |          |         | plain    |              | 
+ edge_lid     | integer  |           |          |         | plain    |              | 
+ dir          | bytea    |           |          |         | extended |              | 
+ other_id     | bigint   |           |          |         | plain    |              | 
+ other_lid    | integer  |           |          |         | plain    |              | 
+ next_tbl     | regclass |           |          |         | plain    |              | 
+ next_itemptr | bytea    |           |          |         | extended |              | 
+ prev_tbl     | regclass |           |          |         | plain    |              | 
+ prev_itemptr | bytea    |           |          |         | extended |              | 
+
+ 
+SELECT * FROM public.np_edge_21_1;
+ id |                                         edge                                          
+----+---------------------------------------------------------------------------------------
+  0 | {"id": 0, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+(2 rows)
+
 SELECT * FROM public.np_vertex_21_1;
- id | vertex 
-----+--------
-(0 rows)
+ id |                               vertex                               
+----+--------------------------------------------------------------------
+  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}}
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+(2 rows)
 
 RESET neopostgraph.show_dictionary_keys;

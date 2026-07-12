@@ -23,6 +23,7 @@
 #include "catalog/storage_xlog.h"
 #include "executor/tuptable.h"
 #include "miscadmin.h"
+#include "nodes/execnodes.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/itemptr.h"
@@ -77,8 +78,6 @@ static void np_scan_set_tidrange(TableScanDesc sscan, ItemPointer mintid, ItemPo
 static bool np_scan_getnextslot_tidrange(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *slot);
 static TransactionId np_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate);
 static void np_estimate_rel_size(Relation rel, int32 *attr_widths, BlockNumber *pages, double *tuples, double *allvisfrac);
-
-
 
 /*
  * np_slot_callbacks - Provide the Executor with memory operations

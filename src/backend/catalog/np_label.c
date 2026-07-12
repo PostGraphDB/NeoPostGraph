@@ -1028,3 +1028,111 @@ void create_metadata_gist_index(char *tbl_name)
     ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
                    PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
 }
+
+
+/*
+ * create_new_active_linked_list
+ *
+ * Creates a new linked list partition and makes it the active one.
+ * The previous active partition (if any) is marked as inactive.
+ */
+Oid
+create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll_meta_oid, Oid namespace_oid)
+{
+    if (!OidIsValid(ll_seq_oid) || !OidIsValid(ll_meta_oid))
+        ereport(ERROR, (errmsg("Invalid linked_list_seq or linked_list_meta OID")));
+
+    /* 1. Get next partition number */
+    Oid partition_id = DatumGetObjectId(
+        DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq_oid))
+    );
+
+    /* 2. Create the new linked list table */
+    char *tbl_name = psprintf("np_vertex_%d_%d_%u_linked_list",
+                              graph_id, label_id, partition_id);
+
+    Oid new_list_oid = create_vertex_label_linked_list_table(tbl_name, namespace_oid);
+    if (!OidIsValid(new_list_oid))
+        ereport(ERROR, (errmsg("Failed to create linked list table")));
+
+    /* 3. Update linked_list_meta */
+    Relation meta_rel = table_open(ll_meta_oid, RowExclusiveLock);
+
+    /* Deactivate current active row */
+    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    HeapTuple tuple;
+
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+    {
+        bool isnull;
+        bool active = DatumGetBool(heap_getattr(tuple, 3, RelationGetDescr(meta_rel), &isnull));
+
+        if (active)
+        {
+            Datum values[3];
+            bool nulls[3];
+            bool replace[3] = {false, false, true};
+
+            values[2] = BoolGetDatum(false);
+            nulls[2] = false;
+
+            HeapTuple newtup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel),
+                                                   values, nulls, replace);
+            CatalogTupleUpdate(meta_rel, &tuple->t_self, newtup);
+            heap_freetuple(newtup);
+            break;
+        }
+    }
+    systable_endscan(scan);
+
+    /* Insert new active row */
+    {
+        Datum values[3];
+        bool nulls[3] = {false, false, false};
+
+        values[0] = Int32GetDatum(partition_id);     // id
+        values[1] = ObjectIdGetDatum(new_list_oid);  // tbl
+        values[2] = BoolGetDatum(true);              // active
+
+        HeapTuple newtup = heap_form_tuple(RelationGetDescr(meta_rel), values, nulls);
+        CatalogTupleInsert(meta_rel, newtup);
+        heap_freetuple(newtup);
+    }
+
+    table_close(meta_rel, RowExclusiveLock);
+    CommandCounterIncrement();
+
+    return new_list_oid;
+}
+
+PG_FUNCTION_INFO_V1(rotate_active_linked_list_table);
+Datum
+rotate_active_linked_list_table(PG_FUNCTION_ARGS)
+{
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("graph_name and label_id are required")));
+
+    char *graph_name = NameStr(*PG_GETARG_NAME(0));
+    int32 label_id   = PG_GETARG_INT32(1);
+
+    Oid namespace = linitial_oid(fetch_search_path(false));
+
+    const graph_cache_data *graph = search_graph_name_namespace_cache(graph_name, namespace);
+    if (!graph)
+        ereport(ERROR, (errmsg("graph \"%s\" does not exist", graph_name)));
+
+    const label_cache_data *label = search_vertex_label_graph_id_label_id_cache(graph->id, label_id);
+    if (!label || !OidIsValid(label->linked_list_meta) || !OidIsValid(label->linked_list_seq))
+        ereport(ERROR, (errmsg("label does not have linked list setup")));
+
+    create_new_active_linked_list(
+        graph->id,
+        label_id,
+        label->linked_list_seq,
+        label->linked_list_meta,
+        namespace
+    );
+
+    PG_RETURN_VOID();
+}

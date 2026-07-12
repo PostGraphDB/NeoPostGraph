@@ -223,6 +223,11 @@ RETURNS void
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION rotate_active_linked_list_table(graph_name Name, label_id int)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
 CREATE FUNCTION create_elabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
 RETURNS void 
 LANGUAGE c 

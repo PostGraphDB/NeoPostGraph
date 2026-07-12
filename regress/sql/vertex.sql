@@ -136,6 +136,25 @@ select insert_edge(
 
 SELECT * FROM public.np_edge_21_1;
 
+select rotate_active_linked_list_table('vertex_graph', 2);
+
+select insert_edge(
+  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      1::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+
+select * from np_vertex_21_2_linked_list_meta;
+
+\d+ np_vertex_21_2_1_linked_list
+\d+ np_vertex_21_2_2_linked_list
+ 
+SELECT * FROM public.np_edge_21_1;
+
 
 SELECT * FROM public.np_vertex_21_1;
 

@@ -13,32 +13,19 @@
  * GNU General Public License for more details.
  */
 
-#ifndef NP_MAP_AM_H
-#define NP_MAP_AM_H
+#ifndef NP_MUTABLE_AM_H
+#define NP_MUTABLE_AM_H
 
 #include "postgres.h"
-#include "access/tableam.h"
 
 #include "access/heapam.h"
-#include "access/heapam_xlog.h"
-#include "access/hio.h"
-#include "access/htup_details.h"
 #include "access/tableam.h"
+#include "access/htup_details.h"
 #include "access/xact.h"
-#include "access/xlog.h"
-#include "access/xloginsert.h"
-#include "catalog/namespace.h"
-#include "catalog/pg_type.h"
-#include "executor/tuptable.h"
-#include "miscadmin.h"
-#include "nodes/execnodes.h"
-#include "storage/bufmgr.h"
-#include "storage/bufpage.h"
 #include "storage/itemptr.h"
-#include "storage/lmgr.h"
 #include "utils/rel.h"
-#include "utils/snapmgr.h"
-#include "commands/vacuum.h"
+#include "executor/tuptable.h"
+
 
 extern const TableAmRoutine np_methods;
 
@@ -47,4 +34,4 @@ void np_heap_insert(Relation relation, HeapTuple tup, CommandId cid, int options
 void np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid);
 uint32 np_calculate_tuples_per_page(Size payload_size);
 
-#endif
+#endif // NP_MUTABLE_AM_H
