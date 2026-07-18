@@ -43,6 +43,7 @@
 
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
+#include "utils/adj_list.h"
 #include "utils/dictionary.h"
 #include "utils/edge.h"
 #include "utils/vertex.h"
@@ -89,17 +90,37 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(vertex_id_seq)));
 
     Oid vertex_tbl = create_vertex_tables(graph_id, label_id, namespace);
-    Oid phys_map = create_label_vertex_physical_mapping_table(psprintf("np_vertex_%d_%d_phys_map", graph_id, label_id), namespace);
-    Oid arraylist = create_vertex_label_arraylist_table(psprintf("np_vertex_%d_%d_arraylist", graph_id, label_id), namespace);
+    Oid phys_map   = create_label_vertex_physical_mapping_table(
+                        psprintf("np_vertex_%d_%d_phys_map", graph_id, label_id), namespace);
+    Oid arraylist  = create_vertex_label_arraylist_table(
+                        psprintf("np_vertex_%d_%d_arraylist", graph_id, label_id), namespace);
 
-    //linked list
-    Oid ll_seq = create_linked_list_table_sequence(psprintf("np_vertex_%d_%d_linked_list_seq", graph_id, label_id), "neopostgraph");    
+    Oid ll_seq = create_linked_list_table_sequence(
+        psprintf("np_vertex_%d_%d_linked_list_seq", graph_id, label_id), 
+        "neopostgraph"
+    );
+
     Oid ll_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq)));
+
+    char *ll_table_name = psprintf("np_vertex_%d_%d_%d_linked_list", 
+                                   graph_id, label_id, ll_id);
+    Oid ll_table = create_vertex_label_linked_list_table(ll_table_name, namespace);
+
     char *ll_meta_table = psprintf("np_vertex_%d_%d_linked_list_meta", graph_id, label_id);
     Oid ll_meta = create_vertex_label_linked_list_metadata_table(ll_meta_table, namespace);
-    insert_vertex_ll_meta(ll_meta_table, namespace, ll_seq, ll_id);
 
-    insert_vertex_label(psprintf("np_vertex_label_%d", graph_id), DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, vertex_tbl, phys_map,arraylist,ll_seq, ll_meta);
+    insert_vertex_ll_meta(ll_meta_table, namespace,  ll_table, ll_id);
+
+    insert_vertex_label(
+        psprintf("np_vertex_label_%d", graph_id),
+        DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
+        label_id,
+        vertex_tbl,
+        phys_map,
+        arraylist,
+        ll_seq,
+        ll_meta
+    );
 
     Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
@@ -107,11 +128,9 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
     return vertex_tbl;
 }
 
-
 PG_FUNCTION_INFO_V1(create_vlabel);
 Datum create_vlabel(PG_FUNCTION_ARGS)
 {
-    // fetch the namespace the graph is created in
     Oid namespace;
     if (PG_ARGISNULL(2)) {
         List *search_path = fetch_search_path(false);
@@ -173,7 +192,7 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
 
     create_vertex_property_dictionary(entry->id, vertex_tbl);
     //create_vertex_tables(entry->id, label_id, namespace);
-    ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
+    ereport(NOTICE, (errmsg("vlabel \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
@@ -228,9 +247,7 @@ Datum create_elabel(PG_FUNCTION_ARGS)
         label_id,
         edge_tbl);
 
-    //create_edge_property_dictionary(entry->id, edge_tbl);
-    //create_vertex_tables(entry->id, label_id, namespace);
-    ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
+    ereport(NOTICE, (errmsg("elabel \"%s\" has been created", graph_name)));
 
     PG_RETURN_VOID();
 }
@@ -667,7 +684,10 @@ create_vertex_label_linked_list_table(char *tbl_name, Oid namespace)
         makeColumnDef("edge_lid", INT4OID, -1, InvalidOid)
     );
     create_stmt->tableElts = lappend(create_stmt->tableElts,
-        makeColumnDef("dir", BYTEAOID, -1, InvalidOid)
+        makeColumnDef("dir", CHAROID, -1, InvalidOid)
+    );
+    create_stmt->tableElts = lappend(create_stmt->tableElts, 
+        makeColumnDef("owner_id", INT8OID, -1, InvalidOid)
     );
     create_stmt->tableElts = lappend(create_stmt->tableElts,
         makeColumnDef("other_id", INT8OID, -1, InvalidOid)
@@ -679,15 +699,15 @@ create_vertex_label_linked_list_table(char *tbl_name, Oid namespace)
         makeColumnDef("next_tbl", REGCLASSOID, -1, InvalidOid)
     );
     create_stmt->tableElts = lappend(create_stmt->tableElts,
-        makeColumnDef("next_itemptr", BYTEAOID, -1, InvalidOid)
+        makeColumnDef("next_itemptr", TIDOID, -1, InvalidOid)
     );
     create_stmt->tableElts = lappend(create_stmt->tableElts,
         makeColumnDef("prev_tbl", REGCLASSOID, -1, InvalidOid)
     );
     create_stmt->tableElts = lappend(create_stmt->tableElts,
-        makeColumnDef("prev_itemptr", BYTEAOID, -1, InvalidOid)
+        makeColumnDef("prev_itemptr", TIDOID, -1, InvalidOid)
     );
-    create_stmt->accessMethod = "np_mutable";
+    create_stmt->accessMethod = "nplinkedlist";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
@@ -771,10 +791,10 @@ create_vertex_label_arraylist_table(char *tbl_name, Oid namespace)
     /* Fixed columns + one variable column (bytea for adjacency list) */
     create_stmt->tableElts = list_make5(
         makeColumnDef("id", INT8OID, -1, InvalidOid),
-        makeColumnDef("prev_table", REGCLASSOID, 6, InvalidOid),
-        makeColumnDef("prev_itemptr", BYTEAOID, 6, InvalidOid),
-        makeColumnDef("adj_list", BYTEAOID, -1, InvalidOid),
-        makeColumnDef("next_itemptr", BYTEAOID, 6, InvalidOid)
+        makeColumnDef("prev_table", REGCLASSOID, 4, InvalidOid),
+        makeColumnDef("prev_itemptr", TIDOID, -1, InvalidOid),
+        makeColumnDef("adj_list", ADJLISTOID, -1, InvalidOid), //TODO replace with array list type
+        makeColumnDef("next_itemptr", TIDOID, -1, InvalidOid)
     );
 
     create_stmt->accessMethod = NULL;
@@ -814,9 +834,9 @@ Oid create_label_vertex_physical_mapping_table(char *tbl_name, Oid namespace)
 
     create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
 
-    create_stmt->tableElts = list_make3(makeColumnDef("v_itemptr", BYTEAOID, 6, InvalidOid),
-                                        makeColumnDef("e_tbl_id", OIDOID, -1, InvalidOid),
-                                        makeColumnDef("e_itemptr", BYTEAOID, 6, InvalidOid));
+    create_stmt->tableElts = list_make3(makeColumnDef("v_itemptr", TIDOID, -1, InvalidOid),
+                                        makeColumnDef("e_tbl_id", REGCLASSOID, -1, InvalidOid),
+                                        makeColumnDef("e_itemptr", TIDOID, -1, InvalidOid));
     create_stmt->accessMethod = "np_mutable";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
@@ -1042,12 +1062,10 @@ create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll
     if (!OidIsValid(ll_seq_oid) || !OidIsValid(ll_meta_oid))
         ereport(ERROR, (errmsg("Invalid linked_list_seq or linked_list_meta OID")));
 
-    /* 1. Get next partition number */
     Oid partition_id = DatumGetObjectId(
         DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq_oid))
     );
 
-    /* 2. Create the new linked list table */
     char *tbl_name = psprintf("np_vertex_%d_%d_%u_linked_list",
                               graph_id, label_id, partition_id);
 
@@ -1055,10 +1073,8 @@ create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll
     if (!OidIsValid(new_list_oid))
         ereport(ERROR, (errmsg("Failed to create linked list table")));
 
-    /* 3. Update linked_list_meta */
     Relation meta_rel = table_open(ll_meta_oid, RowExclusiveLock);
 
-    /* Deactivate current active row */
     SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
     HeapTuple tuple;
 
@@ -1085,19 +1101,18 @@ create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll
     }
     systable_endscan(scan);
 
-    /* Insert new active row */
-    {
-        Datum values[3];
-        bool nulls[3] = {false, false, false};
+    
+    Datum values[3];
+    bool nulls[3] = {false, false, false};
 
-        values[0] = Int32GetDatum(partition_id);     // id
-        values[1] = ObjectIdGetDatum(new_list_oid);  // tbl
-        values[2] = BoolGetDatum(true);              // active
+    values[0] = Int32GetDatum(partition_id);     // id
+    values[1] = ObjectIdGetDatum(new_list_oid);  // tbl
+    values[2] = BoolGetDatum(true);              // active
 
-        HeapTuple newtup = heap_form_tuple(RelationGetDescr(meta_rel), values, nulls);
-        CatalogTupleInsert(meta_rel, newtup);
-        heap_freetuple(newtup);
-    }
+    HeapTuple newtup = heap_form_tuple(RelationGetDescr(meta_rel), values, nulls);
+    CatalogTupleInsert(meta_rel, newtup);
+    heap_freetuple(newtup);
+    
 
     table_close(meta_rel, RowExclusiveLock);
     CommandCounterIncrement();

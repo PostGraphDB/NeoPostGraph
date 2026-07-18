@@ -26,12 +26,21 @@
 #include "utils/rel.h"
 #include "executor/tuptable.h"
 
-
-extern const TableAmRoutine np_methods;
+typedef struct __attribute__((packed)) NeoPhysMapRecord
+{
+    FullTransactionId xmin;
+    FullTransactionId xmax;
+    CommandId cmin;
+    CommandId cmax;
+    ItemPointerData v_itemptr;
+    Oid e_tbl_id;
+    ItemPointerData e_itemptr;
+} NeoPhysMapRecord;
 
 void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
 void np_heap_insert(Relation relation, HeapTuple tup, CommandId cid, int options, BulkInsertState bistate);
 void np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid);
 uint32 np_calculate_tuples_per_page(Size payload_size);
+void update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_oid, ItemPointer new_edge_tid, CommandId cid);
 
 #endif // NP_MUTABLE_AM_H

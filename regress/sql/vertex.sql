@@ -136,7 +136,6 @@ select insert_edge(
 
 SELECT * FROM public.np_edge_21_1;
 
-select rotate_active_linked_list_table('vertex_graph', 2);
 
 select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
@@ -153,7 +152,102 @@ select * from np_vertex_21_2_linked_list_meta;
 \d+ np_vertex_21_2_1_linked_list
 \d+ np_vertex_21_2_2_linked_list
  
+select * From np_vertex_21_2_1_linked_list;
+select * From np_vertex_21_2_2_linked_list;
+
+select * From np_vertex_21_1_1_linked_list;
+select * From np_vertex_21_1_2_linked_list;
+
+select * from np_vertex_21_1_phys_map;
+
+select * From np_vertex_1_1_1_linked_list;
 SELECT * FROM public.np_edge_21_1;
+
+SELECT insert_vertex(
+  vertex_build(1, 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+);
+
+SELECT insert_vertex(
+  vertex_build(2, 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+);
+select * from np_vertex_21_1_phys_map;
+select insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      2::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+select * from np_vertex_21_1_phys_map;
+select rotate_active_linked_list_table('vertex_graph', 2);
+select * from np_vertex_21_1_phys_map;
+
+select insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+
+
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_2_1_linked_list;
+select * From np_vertex_21_2_2_linked_list;
+
+select compact_oldest_linked_list_table('vertex_graph', 2);
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_2_1_linked_list;
+select * From np_vertex_21_2_2_linked_list;
+SELECT * FROM np_vertex_21_2_arraylist;
+
+
+
+
+SELECT create_vlabel('vertex_graph', 'thirdLabel');
+SELECT insert_vertex(
+  vertex_build(1, 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+);
+
+SELECT insert_vertex(
+  vertex_build(2, 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+);
+select * from np_vertex_21_1_phys_map;
+
+select insert_edge(
+  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+
+select insert_edge(
+  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+select * from np_vertex_21_3_phys_map;
+select * From np_vertex_21_3_1_linked_list;
+select rotate_active_linked_list_table('vertex_graph', 3);
+select compact_oldest_linked_list_table('vertex_graph', 3);
+
+
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_3_1_linked_list;
+select * From np_vertex_21_3_2_linked_list;
+SELECT * FROM np_vertex_21_3_arraylist;
+
 
 
 SELECT * FROM public.np_vertex_21_1;

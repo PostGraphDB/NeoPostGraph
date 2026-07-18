@@ -23,6 +23,7 @@
 -- in its dedicated section.
 --
 CREATE TYPE gtype;
+CREATE TYPE adj_list;
 CREATE TYPE dictionary;
 CREATE TYPE vertex;
 CREATE TYPE edge;
@@ -51,6 +52,34 @@ AS 'MODULE_PATHNAME';
 CREATE TYPE gtype (
     INPUT = gtype_in,
     OUTPUT = gtype_out,
+    LIKE = jsonb,
+    STORAGE = extended
+);
+
+--
+-- Adj_list datatype
+--
+
+--
+-- I/O Routines
+--
+CREATE FUNCTION adj_list_in(cstring) RETURNS adj_list
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION adj_list_out(adj_list) RETURNS cstring
+    LANGUAGE C
+    IMMUTABLE
+RETURNS NULL ON NULL INPUT
+PARALLEL SAFE
+AS 'MODULE_PATHNAME';
+
+CREATE TYPE adj_list (
+    INPUT = adj_list_in,
+    OUTPUT = adj_list_out,
     LIKE = jsonb,
     STORAGE = extended
 );
@@ -125,7 +154,15 @@ CREATE TYPE vertex (
 );
 
 --
--- Constructor Functions
+-- DDL Commands
+--
+CREATE FUNCTION create_vlabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
+--
+-- DML Commands
 --
 CREATE FUNCTION vertex_build(int8, int, int, smallint, gtype)
 RETURNS vertex
@@ -134,6 +171,38 @@ IMMUTABLE
 RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION insert_vertex(vertex)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+--
+-- Vertex Metadata Queries
+--
+CREATE FUNCTION get_vlabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
+RETURNS SETOF int
+AS 'MODULE_PATHNAME', 'get_vlabel_ids_by_path'
+LANGUAGE C STABLE;
+
+CREATE FUNCTION get_or_vlabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
+RETURNS SETOF int
+AS 'MODULE_PATHNAME', 'get_or_vlabel_ids_by_path'
+LANGUAGE C STABLE;
+
+--
+-- Vertex Dictionary
+--
+CREATE FUNCTION dictionary_log(int, int, dictionary)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION vertex_set_dictionary(vertex, int)
+RETURNS vertex
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 
 --
 -- edge datatype
@@ -164,7 +233,15 @@ CREATE TYPE edge (
 );
 
 --
--- Constructor Functions
+-- DDL Commands
+--
+CREATE FUNCTION create_elabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
+--
+-- DML Commands
 --
 CREATE FUNCTION edge_build(int8, int, int, smallint, vertex, vertex, gtype)
 RETURNS edge
@@ -174,18 +251,51 @@ RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION insert_edge(vertex, vertex, edge)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+--
+--
+--
+
 --
 -- Table AM
 --
--- XXX: Doing double duty right now, going to have to split in two eventually
-CREATE OR REPLACE FUNCTION np_mutable_handler(internal)
+-- XXX: Rename to Physical Pointer Hash
+CREATE OR REPLACE FUNCTION np_physmap_mutable_handler(internal)
 RETURNS table_am_handler
-AS 'MODULE_PATHNAME', 'np_mutable_handler'
+AS 'MODULE_PATHNAME', 'np_physmap_mutable_handler'
 LANGUAGE C STRICT;
 
 CREATE ACCESS METHOD np_mutable
 TYPE TABLE 
-HANDLER np_mutable_handler;
+HANDLER np_physmap_mutable_handler;
+
+--
+-- Table AM
+--
+CREATE OR REPLACE FUNCTION np_linked_list_mutable_handler(internal)
+RETURNS table_am_handler
+AS 'MODULE_PATHNAME', 'np_linked_list_mutable_handler'
+LANGUAGE C STRICT;
+
+CREATE ACCESS METHOD NPLinkedList
+TYPE TABLE 
+HANDLER np_linked_list_mutable_handler;
+
+
+CREATE FUNCTION rotate_active_linked_list_table(graph_name Name, label_id int)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
+CREATE OR REPLACE FUNCTION compact_oldest_linked_list_table(graph_name Name, label_id int)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
 
 --
 -- catalog tables
@@ -213,56 +323,10 @@ ALTER TABLE ONLY np_graph ALTER COLUMN id SET DEFAULT nextval('np_graph_id_seq':
 -- Indexes for np_graph
 CREATE UNIQUE INDEX np_graph_name_namespace_index ON np_graph USING btree (name, namespace);
 
+--
+-- DDL Commands
+--
 CREATE FUNCTION create_graph(graph_name Name, namespace text DEFAULT NULL)
 RETURNS void 
 LANGUAGE c 
-AS 'MODULE_PATHNAME';
-
-CREATE FUNCTION create_vlabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
-RETURNS void 
-LANGUAGE c 
-AS 'MODULE_PATHNAME';
-
-CREATE FUNCTION rotate_active_linked_list_table(graph_name Name, label_id int)
-RETURNS void 
-LANGUAGE c 
-AS 'MODULE_PATHNAME';
-
-CREATE FUNCTION create_elabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
-RETURNS void 
-LANGUAGE c 
-AS 'MODULE_PATHNAME';
-
-
-CREATE FUNCTION get_vlabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
-RETURNS SETOF int
-AS 'MODULE_PATHNAME', 'get_vlabel_ids_by_path'
-LANGUAGE C STABLE;
-
-CREATE FUNCTION get_or_vlabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
-RETURNS SETOF int
-AS 'MODULE_PATHNAME', 'get_or_vlabel_ids_by_path'
-LANGUAGE C STABLE;
-
-CREATE FUNCTION dictionary_log(int, int, dictionary)
-RETURNS void
-LANGUAGE c
-AS 'MODULE_PATHNAME';
-
-
-CREATE FUNCTION vertex_set_dictionary(vertex, int)
-RETURNS vertex
-LANGUAGE c
-AS 'MODULE_PATHNAME';
-
-
-CREATE FUNCTION insert_vertex(vertex)
-RETURNS void
-LANGUAGE c
-AS 'MODULE_PATHNAME';
-
-
-CREATE FUNCTION insert_edge(vertex, vertex, edge)
-RETURNS void
-LANGUAGE c
 AS 'MODULE_PATHNAME';

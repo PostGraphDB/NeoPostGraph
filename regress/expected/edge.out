@@ -110,7 +110,7 @@ NOTICE:  graph "edge_graph" has been created
 (1 row)
 
 SELECT create_elabel('edge_graph', 'person');
-NOTICE:  graph "edge_graph" has been created
+NOTICE:  elabel "edge_graph" has been created
  create_elabel 
 ---------------
  
@@ -163,7 +163,7 @@ WHERE graph.name = 'edge_graph'
 (1 row)
 
 SELECT create_elabel('edge_graph', 'person.employee.engineer');
-NOTICE:  graph "edge_graph" has been created
+NOTICE:  elabel "edge_graph" has been created
  create_elabel 
 ---------------
  

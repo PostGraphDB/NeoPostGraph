@@ -40,9 +40,10 @@
 #include "utils/dictionary.h"
 #include "utils/vertex.h"
 #include "catalog/np_label.h"
-#include "access/np_mutable.h"
+#include "access/np_phys_map.h"
 #include "utils/edge.h"
 
+#include "access/np_linked_list.h"
 static Datum
 itemptr_to_bytea(ItemPointer iptr);
 void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
@@ -56,13 +57,83 @@ static void insert_edge_one_direction(vertex *owner_v,
 
 static Oid get_active_linked_list_oid(Oid linked_list_meta_oid);
 
-static ItemPointerData get_current_head_tid(Relation pmap_rel, uint64 vertex_id);
+static ItemPointerData get_current_head_tid(Relation pmap_rel, uint64 vertex_id, Oid *head_tbl);
 
 static void update_edge_prev_pointer(Relation list_rel,
                                      ItemPointer old_head_tid,
+                                     Oid prev_table_oid,
                                      ItemPointer new_tid,
                                      CommandId cid);
 
+static void 
+np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
+{
+    Buffer buffer;
+    Page page;
+    OffsetNumber offnum;
+    BlockNumber blockNum;
+
+    // For now, just grab the last block of the relation.
+    // TODO: Free Space Map to reuse ids after delete is made
+    blockNum = RelationGetNumberOfBlocks(rel);
+    
+    if (blockNum == 0) {
+        // Table is completely empty, extend it by 1 block
+        buffer = ReadBuffer(rel, P_NEW);
+        blockNum = BufferGetBlockNumber(buffer);
+    } else {
+        // Read the last block
+        buffer = ReadBuffer(rel, blockNum - 1);
+        blockNum = BufferGetBlockNumber(buffer);
+    }
+
+    // Lock the buffer exclusively so no one else writes to it at the same time
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    page = BufferGetPage(buffer);
+
+    // If the page is brand new, initialize its header
+    if (PageIsNew(page)) {
+        PageInit(page, BufferGetPageSize(buffer), 0);
+    }
+
+    // Attempt to add the item to the page
+    offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+
+    if (offnum == InvalidOffsetNumber) {
+        // The page is full! We need to extend the file and try again.
+        UnlockReleaseBuffer(buffer);
+        
+        buffer = ReadBuffer(rel, P_NEW);
+        LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+        page = BufferGetPage(buffer);
+        PageInit(page, BufferGetPageSize(buffer), 0);
+        
+        offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+        blockNum = BufferGetBlockNumber(buffer);
+        
+        if (offnum == InvalidOffsetNumber)
+            elog(ERROR, "NeoPostGraph: Failed to add tuple to new page");
+    }
+
+    // Record the physical address
+    ItemPointerSet(out_tid, blockNum, offnum);
+
+    // Mark the buffer dirty so Postgres knows it needs to be written to disk
+    MarkBufferDirty(buffer);
+    
+    // (Note: WAL logging code would go exactly here before unlocking)
+
+    UnlockReleaseBuffer(buffer);
+}
+
+static bytea *
+make_itemptr_bytea(const ItemPointerData *ip)
+{
+    bytea *b = (bytea *) palloc(VARHDRSZ + sizeof(ItemPointerData));
+    SET_VARSIZE(b, VARHDRSZ + sizeof(ItemPointerData));
+    memcpy(VARDATA(b), ip, sizeof(ItemPointerData));
+    return b;
+}
 
 PG_FUNCTION_INFO_V1(insert_vertex);
 Datum
@@ -80,46 +151,35 @@ insert_vertex(PG_FUNCTION_ARGS)
                  errmsg("label not found: graph_id=%d, label_id=%d",
                         v->graph_id, v->label_id)));
 
-    Relation rel;
-    HeapTuple tup;
-    Datum values[2];
+    Datum values[2]= { Int64GetDatum(v->id), PointerGetDatum(v) };
     bool nulls[2] = {false, false};
-    ItemPointerData v_itemptr;
+    
+    Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
 
-    /* === 1. Insert into main vertex table === */
-    rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
-
-    values[0] = Int64GetDatum(v->id);
-    values[1] = PointerGetDatum(v);
-
-    tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+    HeapTuple tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
     tup->t_tableOid = RelationGetRelid(rel);
 
     np_heap_insert(rel, tup, cid, 0, NULL);
 
-    v_itemptr = tup->t_self;
+    ItemPointerData v_itemptr = tup->t_self;
 
     table_close(rel, RowExclusiveLock);
 
-    /* === 2. Insert into phys_map === */
-    Relation pmap_rel;
-    HeapTuple pmap_tup;
-    Datum pmap_values[3];
-    bool pmap_nulls[3] = {false, true, true};
-
-    pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
-
-    pmap_values[0] = itemptr_to_bytea(&v_itemptr);
-    pmap_values[1] = (Datum)0;
-    pmap_values[2] = (Datum)0;
-
-    pmap_tup = heap_form_tuple(RelationGetDescr(pmap_rel), pmap_values, pmap_nulls);
-    pmap_tup->t_tableOid = RelationGetRelid(pmap_rel);
-
-    np_heap_insert(pmap_rel, pmap_tup, cid, 0, NULL);
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+    NeoPhysMapRecord rec = {
+        .xmin = GetTopFullTransactionId(),
+        .cmin = cid,
+        .xmax = InvalidFullTransactionId,
+        .cmax = InvalidCommandId,
+        .v_itemptr = v_itemptr,
+        .e_tbl_id = InvalidOid
+    };
+    ItemPointerSetInvalid(&rec.e_itemptr);
+    
+    ItemPointerData dummy_tid;
+    np_write_record_to_page(pmap_rel, (char *) &rec, sizeof(NeoPhysMapRecord), &dummy_tid);
 
     table_close(pmap_rel, RowExclusiveLock);
-
     PG_RETURN_VOID();
 }
 
@@ -128,12 +188,11 @@ Datum
 insert_edge(PG_FUNCTION_ARGS)
 {
     vertex *start_v = NP_GET_ARG_VERTEX(0);
-    vertex *end_v   = NP_GET_ARG_VERTEX(1);
-    edge   *e       = NP_GET_ARG_EDGE(2);
+    vertex *end_v = NP_GET_ARG_VERTEX(1);
+    edge *e = NP_GET_ARG_EDGE(2);
 
     CommandId cid = GetCurrentCommandId(true);
 
-    /* === 1. Insert into the main per-label edge table === */
     const label_cache_data *edge_label =
         search_edge_label_graph_id_label_id_cache(e->graph_id, e->label_id);
 
@@ -142,22 +201,18 @@ insert_edge(PG_FUNCTION_ARGS)
 
     Relation edge_rel = table_open(edge_label->vertex_tbl, RowExclusiveLock);
 
-    HeapTuple edge_tup;
-    Datum edge_values[2];
+    Datum edge_values[2] = { Int64GetDatum(e->id), PointerGetDatum(e) };
     bool edge_nulls[2] = {false, false};
 
-    edge_values[0] = Int64GetDatum(e->id);
-    edge_values[1] = PointerGetDatum(e);           // store the full 'edge' composite
-
-    edge_tup = heap_form_tuple(RelationGetDescr(edge_rel), edge_values, edge_nulls);
+    HeapTuple edge_tup = heap_form_tuple(RelationGetDescr(edge_rel), edge_values, edge_nulls);
     edge_tup->t_tableOid = RelationGetRelid(edge_rel);
 
     np_heap_insert(edge_rel, edge_tup, cid, 0, NULL);
     table_close(edge_rel, RowExclusiveLock);
 
 
-    insert_edge_one_direction(start_v, end_v, e, 0, cid); // outgoing
-    insert_edge_one_direction(end_v, start_v, e, 1, cid); // incoming
+    insert_edge_one_direction(start_v, end_v, e, 0, cid);
+    insert_edge_one_direction(end_v, start_v, e, 1, cid);
 
     PG_RETURN_VOID();
 }
@@ -183,12 +238,6 @@ np_calculate_tuples_per_page(Size payload_size)
     return available_space / space_per_item;
 }
 
-/*
- * np_id_to_tid
- *
- * The O(1) Positional Router. 
- * Converts a sequential 1-indexed ID directly into a physical disk pointer.
- */
 void
 np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid)
 {
@@ -227,8 +276,7 @@ void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple
 
     lp = PageGetItemId(page, ItemPointerGetOffsetNumber(otid));
 
-    if (!ItemIdIsNormal(lp))
-    {
+    if (!ItemIdIsNormal(lp)) {
         UnlockReleaseBuffer(buffer);
         ereport(ERROR, (errcode(ERRCODE_DATA_CORRUPTED),
              errmsg("NeoPostGraph: Positional mapping failed. Line pointer is not normal at TID (%u, %u)",
@@ -243,20 +291,19 @@ void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple
 
     result = HeapTupleSatisfiesUpdate(&oldtup, cid, buffer);
 
-    if (result == TM_SelfModified) result = TM_Ok;
+    if (result == TM_SelfModified)
+        result = TM_Ok;
 
-    if (result != TM_Ok)
-    {
+    if (result != TM_Ok) {
         UnlockReleaseBuffer(buffer);
         ereport(ERROR, (errcode(ERRCODE_DATA_CORRUPTED),
              errmsg("NeoPostGraph: Unexpected visibility failure (%d) during in-place overwrite.", result)));
     }
 
-    if (newtup->t_len != oldtup.t_len)
-    {
+    if (newtup->t_len != oldtup.t_len) {
         UnlockReleaseBuffer(buffer);
         ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-             errmsg("NeoPostGraph: In-place update requires identical raw tuple sizes.")));
+             errmsg("NeoPostGraph: In-place update requires identical raw tuple sizes.%i %i",newtup->t_len, oldtup.t_len )));
     }
 
     START_CRIT_SECTION();
@@ -272,8 +319,7 @@ void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple
 
     MarkBufferDirty(buffer);
 
-    if (RelationNeedsWAL(relation))
-    {
+    if (RelationNeedsWAL(relation)) {
         xl_heap_inplace xlrec;
         XLogRecPtr recptr;
 
@@ -367,52 +413,35 @@ np_heap_insert(Relation relation, HeapTuple tup, CommandId cid,
  * Uses positional math (np_id_to_tid) to directly locate the phys_map row
  * for a vertex and performs an in-place update of its edge pointer.
  */
-static void
-update_vertex_phys_map(Relation pmap_rel,
-                       uint64 vertex_id,
-                       ItemPointer new_edge_tid,
-                       CommandId cid)
+void
+update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_oid, ItemPointer new_edge_tid, CommandId cid)
 {
-    TupleDesc tupdesc = RelationGetDescr(pmap_rel);
-
-    Size payload_size = sizeof(ItemPointerData) + sizeof(Oid) + sizeof(ItemPointerData);
+    Size payload_size = sizeof(NeoPhysMapRecord);
     uint32 tuples_per_page = np_calculate_tuples_per_page(payload_size);
 
     ItemPointerData target_tid;
     np_id_to_tid(vertex_id, tuples_per_page, &target_tid);
 
-    /* Fetch old tuple */
     Buffer buffer = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&target_tid));
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
     Page page = BufferGetPage(buffer);
     ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
 
-    HeapTupleData oldtup_data;
-    oldtup_data.t_data = (HeapTupleHeader) PageGetItem(page, lp);
-    oldtup_data.t_len  = ItemIdGetLength(lp);
-    oldtup_data.t_self = target_tid;
-    oldtup_data.t_tableOid = RelationGetRelid(pmap_rel);
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: phys_map positional update failed");
+    }
 
-    HeapTuple oldtup = &oldtup_data;
+    NeoPhysMapRecord *disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+    disk_rec->e_tbl_id = new_edge_table_oid;
+    disk_rec->e_itemptr = *new_edge_tid;
 
-    /* Build new tuple */
-    bytea *e_itemptr_bytea = (bytea *)itemptr_to_bytea(new_edge_tid);
+    MarkBufferDirty(buffer);
+    // (WAL logging here)
 
-    Datum values[3];
-    bool nulls[3];
-    bool replace[3] = {false, true, true};
-
-    values[1] = ObjectIdGetDatum(RelationGetRelid(pmap_rel));
-    values[2] = PointerGetDatum(e_itemptr_bytea);
-
-    HeapTuple newtup = heap_modify_tuple(oldtup, tupdesc, values, nulls, replace);
-
-    /* === IMPORTANT: Release the lock before calling np_update_inplace === */
     UnlockReleaseBuffer(buffer);
-
-    /* Now safe to call */
-    np_update_inplace(pmap_rel, &target_tid, newtup, cid);
 }
+    
 static Datum
 itemptr_to_bytea(ItemPointer iptr)
 {
@@ -447,95 +476,98 @@ insert_edge_one_direction(vertex *owner_v,
 
     Relation list_rel = table_open(active_list_oid, RowExclusiveLock);
     Relation pmap_rel = table_open(owner_label->phys_map, RowExclusiveLock);
+    Oid old_head_tbl = InvalidOid;
+    ItemPointerData old_head = get_current_head_tid(pmap_rel, owner_v->id, &old_head_tbl);
 
-    ItemPointerData old_head = get_current_head_tid(pmap_rel, owner_v->id);
+    ItemPointerData next_ip;
+    ItemPointerData prev_ip;
 
-    bytea *dir = (bytea *) palloc(VARHDRSZ + 1);
-    SET_VARSIZE(dir, VARHDRSZ + 1);
-    *VARDATA(dir) = direction;
+    TupleTableSlot *slot = table_slot_create(list_rel, NULL);
+    ExecClearTuple(slot);
 
-    HeapTuple new_tup;
-    Datum values[9];
-    bool nulls[9] = {false};
+    memset(slot->tts_isnull, false, 10 * sizeof(bool));
 
-    values[0] = Int64GetDatum(e->id);
-    values[1] = Int32GetDatum(e->label_id);
-    values[2] = PointerGetDatum(dir);
-    values[3] = Int64GetDatum(other_v->id);
-    values[4] = Int32GetDatum(other_v->label_id);
+    slot->tts_values[0] = Int64GetDatum(e->id);
+    slot->tts_values[1] = Int32GetDatum(e->label_id);
+    slot->tts_values[2] = CharGetDatum((char) direction);
+    slot->tts_values[3] = Int64GetDatum(owner_v->id); 
+    slot->tts_values[4] = Int64GetDatum(other_v->id);
+    slot->tts_values[5] = Int32GetDatum(other_v->label_id);
 
     if (ItemPointerIsValid(&old_head)) {
-        values[5] = ObjectIdGetDatum(RelationGetRelid(list_rel));
-        values[6] = PointerGetDatum(&old_head);
+        slot->tts_values[6] = ObjectIdGetDatum(old_head_tbl); 
+        next_ip = old_head;
+        slot->tts_values[7] = PointerGetDatum(&next_ip);
     } else {
-        values[5] = ObjectIdGetDatum(InvalidOid);
-        values[6] = (Datum)0;
+        slot->tts_values[6] = ObjectIdGetDatum(InvalidOid);
+        
+        ItemPointerSetInvalid(&next_ip);
+        slot->tts_values[7] = PointerGetDatum(&next_ip);
     }
 
-    values[7] = ObjectIdGetDatum(InvalidOid);
-    values[8] = (Datum)0;
+    slot->tts_values[8] = ObjectIdGetDatum(InvalidOid);    
+    ItemPointerSetInvalid(&prev_ip);
+    slot->tts_values[9] = PointerGetDatum(&prev_ip);
 
-    new_tup = heap_form_tuple(RelationGetDescr(list_rel), values, nulls);
-    new_tup->t_tableOid = RelationGetRelid(list_rel);
+    ExecStoreVirtualTuple(slot);
 
-    np_heap_insert(list_rel, new_tup, cid, 0, NULL);
-    ItemPointerData new_tid = new_tup->t_self;
+    table_tuple_insert(list_rel, slot, cid, 0, NULL);
+    
+    ItemPointerData new_tid = slot->tts_tid;
 
-    /* Update old head's prev pointer (if existed) */
-    if (ItemPointerIsValid(&old_head)) {
-        update_edge_prev_pointer(list_rel, &old_head, &new_tid, cid);
+    ExecDropSingleTupleTableSlot(slot);
+
+    if (ItemPointerIsValid(&old_head) && OidIsValid(old_head_tbl)) {
+        Relation old_head_rel;
+        bool close_rel = false;
+        
+        if (old_head_tbl == active_list_oid) {
+            old_head_rel = list_rel;
+        } else {
+            old_head_rel = table_open(old_head_tbl, RowExclusiveLock);
+            close_rel = true;
+        }
+
+        update_edge_prev_pointer(old_head_rel, &old_head, active_list_oid, &new_tid, cid);
+
+        if (close_rel) {
+            table_close(old_head_rel, RowExclusiveLock);
+        }
     }
+
+    update_vertex_phys_map(pmap_rel, owner_v->id, active_list_oid, &new_tid, cid);
 
     table_close(list_rel, RowExclusiveLock);
-
-    /* Update phys_map */
-    update_vertex_phys_map(pmap_rel, owner_v->id, &new_tid, cid);
     table_close(pmap_rel, RowExclusiveLock);
 }
 
-
 static void
-update_edge_prev_pointer(Relation list_rel,
-                         ItemPointer old_head_tid,
-                         ItemPointer new_tid,
-                         CommandId cid)
+update_edge_prev_pointer(Relation rel, ItemPointer old_head_tid, Oid prev_table_oid, ItemPointer new_head_tid, CommandId cid)
 {
-    HeapTuple oldtup, newtup;
-    TupleDesc tupdesc = RelationGetDescr(list_rel);
-    Datum values[9];
-    bool nulls[9];
-    bool replace[9] = {false};
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(old_head_tid));
+    
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    Page page = BufferGetPage(buffer);
 
-    /* We need the old tuple. Since we have the TID, fetch it directly */
-    Buffer buffer;
-    Page page;
-    ItemId lp;
-    HeapTupleData oldtup_data;
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(old_head_tid));
 
-    buffer = ReadBuffer(list_rel, ItemPointerGetBlockNumber(old_head_tid));
-    LockBuffer(buffer, BUFFER_LOCK_SHARE);
-    page = BufferGetPage(buffer);
-    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(old_head_tid));
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: attempted to update prev pointer on a dead or invalid tuple");
+    }
 
-    oldtup_data.t_data = (HeapTupleHeader) PageGetItem(page, lp);
-    oldtup_data.t_len  = ItemIdGetLength(lp);
-    oldtup_data.t_self = *old_head_tid;
-    oldtup_data.t_tableOid = RelationGetRelid(list_rel);
+    NeoLinkedListRecord *disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
 
-    oldtup = &oldtup_data;
+    disk_rec->prev_tbl = prev_table_oid;
+    disk_rec->prev_itemptr = *new_head_tid;
 
-    replace[7] = true; // prev_tbl
-    replace[8] = true; // prev_itemptr
-
-    values[7] = ObjectIdGetDatum(RelationGetRelid(list_rel));
-    values[8] = PointerGetDatum(new_tid);
-
-    newtup = heap_modify_tuple(oldtup, tupdesc, values, nulls, replace);
-
-    np_update_inplace(list_rel, old_head_tid, newtup, cid);
+    MarkBufferDirty(buffer);
+    
+    /* (WAL logging for the pointer mutation goes here) */
 
     UnlockReleaseBuffer(buffer);
 }
+
 /*
  * get_active_linked_list_oid
  *
@@ -580,49 +612,34 @@ get_active_linked_list_oid(Oid linked_list_meta_oid)
  * Uses positional math to locate the phys_map row for a vertex
  * and returns the current head edge pointer (e_itemptr).
  */
-static ItemPointerData
-get_current_head_tid(Relation pmap_rel, uint64 vertex_id)
+static ItemPointerData get_current_head_tid(Relation pmap_rel, uint64 vertex_id, Oid *head_tbl)
 {
-    ItemPointerData head_tid = {0};   // returns invalid TID if no head
-    TupleDesc tupdesc = RelationGetDescr(pmap_rel);
-    bool isnull;
+    ItemPointerData head_tid;
+    ItemPointerSetInvalid(&head_tid);
+    if (head_tbl) *head_tbl = InvalidOid;
 
-    /* Calculate how many tuples fit per page in phys_map */
-    Size payload_size = sizeof(ItemPointerData) + sizeof(Oid) + sizeof(ItemPointerData);
+    /* FIX: Must match np_write_record_to_page exactly */
+    Size payload_size = sizeof(NeoPhysMapRecord);
     uint32 tuples_per_page = np_calculate_tuples_per_page(payload_size);
 
-    /* Compute exact physical TID of this vertex's row in phys_map */
     ItemPointerData target_tid;
     np_id_to_tid(vertex_id, tuples_per_page, &target_tid);
+    
+    BlockNumber target_blk = ItemPointerGetBlockNumber(&target_tid);
+    if (target_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        return head_tid; 
+    }
 
-    /* Fetch the tuple directly */
-    Buffer buffer = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&target_tid));
+    Buffer buffer = ReadBuffer(pmap_rel, target_blk);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
     Page page = BufferGetPage(buffer);
     ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
 
-    if (!ItemIdIsNormal(lp)) {
-        UnlockReleaseBuffer(buffer);
-        return head_tid;
+    if (ItemIdIsNormal(lp)) {
+        NeoPhysMapRecord *disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+        head_tid = disk_rec->e_itemptr; 
+        if (head_tbl) *head_tbl = disk_rec->e_tbl_id; /* Capture the table! */
     }
-
-    HeapTupleData tup_data;
-    tup_data.t_data = (HeapTupleHeader) PageGetItem(page, lp);
-    tup_data.t_len  = ItemIdGetLength(lp);
-    tup_data.t_self = target_tid;
-    tup_data.t_tableOid = RelationGetRelid(pmap_rel);
-
-    /* Get e_itemptr (column 3) safely */
-    Datum e_itemptr_datum = heap_getattr(&tup_data, 3, tupdesc, &isnull);
-
-    if (!isnull && e_itemptr_datum != 0) {
-        bytea *e_itemptr_bytea = DatumGetByteaPCopy(e_itemptr_datum);
-
-        if (VARSIZE_ANY_EXHDR(e_itemptr_bytea) == sizeof(ItemPointerData)) {
-            memcpy(&head_tid, VARDATA_ANY(e_itemptr_bytea), sizeof(ItemPointerData));
-        }
-    }
-
     UnlockReleaseBuffer(buffer);
     return head_tid;
 }

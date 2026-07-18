@@ -110,7 +110,7 @@ NOTICE:  graph "vertex_graph" has been created
 (1 row)
 
 SELECT create_vlabel('vertex_graph', 'person');
-NOTICE:  graph "vertex_graph" has been created
+NOTICE:  vlabel "vertex_graph" has been created
  create_vlabel 
 ---------------
  
@@ -147,11 +147,11 @@ Not-null constraints:
 
 \d+ np_vertex_21_2_phys_map
                             Table "public.np_vertex_21_2_phys_map"
-  Column   |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
------------+----------+-----------+----------+---------+----------+--------------+-------------
- v_itemptr | bytea(6) |           |          |         | extended |              | 
- e_tbl_id  | oid      |           |          |         | plain    |              | 
- e_itemptr | bytea(6) |           |          |         | extended |              | 
+  Column   |   Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+-----------+----------+-----------+----------+---------+---------+--------------+-------------
+ v_itemptr | tid      |           |          |         | plain   |              | 
+ e_tbl_id  | regclass |           |          |         | plain   |              | 
+ e_itemptr | tid      |           |          |         | plain   |              | 
 
 \d+ np_vertex_21_2_linked_list_meta
                       Table "public.np_vertex_21_2_linked_list_meta"
@@ -163,27 +163,28 @@ Not-null constraints:
 
 \d+ np_vertex_21_2_1_linked_list
                            Table "public.np_vertex_21_2_1_linked_list"
-    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------------+----------+-----------+----------+---------+----------+--------------+-------------
- id           | bigint   |           |          |         | plain    |              | 
- edge_lid     | integer  |           |          |         | plain    |              | 
- dir          | bytea    |           |          |         | extended |              | 
- other_id     | bigint   |           |          |         | plain    |              | 
- other_lid    | integer  |           |          |         | plain    |              | 
- next_tbl     | regclass |           |          |         | plain    |              | 
- next_itemptr | bytea    |           |          |         | extended |              | 
- prev_tbl     | regclass |           |          |         | plain    |              | 
- prev_itemptr | bytea    |           |          |         | extended |              | 
+    Column    |   Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------------+----------+-----------+----------+---------+---------+--------------+-------------
+ id           | bigint   |           |          |         | plain   |              | 
+ edge_lid     | integer  |           |          |         | plain   |              | 
+ dir          | "char"   |           |          |         | plain   |              | 
+ owner_id     | bigint   |           |          |         | plain   |              | 
+ other_id     | bigint   |           |          |         | plain   |              | 
+ other_lid    | integer  |           |          |         | plain   |              | 
+ next_tbl     | regclass |           |          |         | plain   |              | 
+ next_itemptr | tid      |           |          |         | plain   |              | 
+ prev_tbl     | regclass |           |          |         | plain   |              | 
+ prev_itemptr | tid      |           |          |         | plain   |              | 
 
 \d+ np_vertex_21_2_arraylist
                                Table "public.np_vertex_21_2_arraylist"
     Column    |    Type     | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------------+-------------+-----------+----------+---------+----------+--------------+-------------
  id           | bigint      |           |          |         | plain    |              | 
- prev_table   | regclass(6) |           |          |         | plain    |              | 
- prev_itemptr | bytea(6)    |           |          |         | extended |              | 
- adj_list     | bytea       |           |          |         | extended |              | 
- next_itemptr | bytea(6)    |           |          |         | extended |              | 
+ prev_table   | regclass(4) |           |          |         | plain    |              | 
+ prev_itemptr | tid         |           |          |         | plain    |              | 
+ adj_list     | adj_list    |           |          |         | extended |              | 
+ next_itemptr | tid         |           |          |         | plain    |              | 
 
  
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
@@ -196,7 +197,7 @@ WHERE graph.name = 'vertex_graph'
 (1 row)
 
 SELECT create_vlabel('vertex_graph', 'person.employee.engineer');
-NOTICE:  graph "vertex_graph" has been created
+NOTICE:  vlabel "vertex_graph" has been created
  create_vlabel 
 ---------------
  
@@ -391,12 +392,6 @@ SELECT * FROM public.np_edge_21_1;
   0 | {"id": 0, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
 (1 row)
 
-select rotate_active_linked_list_table('vertex_graph', 2);
- rotate_active_linked_list_table 
----------------------------------
- 
-(1 row)
-
 select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
@@ -414,44 +409,304 @@ select insert_edge(
 select * from np_vertex_21_2_linked_list_meta;
  id |             tbl              | active 
 ----+------------------------------+--------
-  1 | np_vertex_21_2_1_linked_list | f
-  2 | np_vertex_21_2_2_linked_list | t
-(2 rows)
+  1 | np_vertex_21_2_1_linked_list | t
+(1 row)
 
 \d+ np_vertex_21_2_1_linked_list
                            Table "public.np_vertex_21_2_1_linked_list"
-    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------------+----------+-----------+----------+---------+----------+--------------+-------------
- id           | bigint   |           |          |         | plain    |              | 
- edge_lid     | integer  |           |          |         | plain    |              | 
- dir          | bytea    |           |          |         | extended |              | 
- other_id     | bigint   |           |          |         | plain    |              | 
- other_lid    | integer  |           |          |         | plain    |              | 
- next_tbl     | regclass |           |          |         | plain    |              | 
- next_itemptr | bytea    |           |          |         | extended |              | 
- prev_tbl     | regclass |           |          |         | plain    |              | 
- prev_itemptr | bytea    |           |          |         | extended |              | 
+    Column    |   Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------------+----------+-----------+----------+---------+---------+--------------+-------------
+ id           | bigint   |           |          |         | plain   |              | 
+ edge_lid     | integer  |           |          |         | plain   |              | 
+ dir          | "char"   |           |          |         | plain   |              | 
+ owner_id     | bigint   |           |          |         | plain   |              | 
+ other_id     | bigint   |           |          |         | plain   |              | 
+ other_lid    | integer  |           |          |         | plain   |              | 
+ next_tbl     | regclass |           |          |         | plain   |              | 
+ next_itemptr | tid      |           |          |         | plain   |              | 
+ prev_tbl     | regclass |           |          |         | plain   |              | 
+ prev_itemptr | tid      |           |          |         | plain   |              | 
 
 \d+ np_vertex_21_2_2_linked_list
-                           Table "public.np_vertex_21_2_2_linked_list"
-    Column    |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------------+----------+-----------+----------+---------+----------+--------------+-------------
- id           | bigint   |           |          |         | plain    |              | 
- edge_lid     | integer  |           |          |         | plain    |              | 
- dir          | bytea    |           |          |         | extended |              | 
- other_id     | bigint   |           |          |         | plain    |              | 
- other_lid    | integer  |           |          |         | plain    |              | 
- next_tbl     | regclass |           |          |         | plain    |              | 
- next_itemptr | bytea    |           |          |         | extended |              | 
- prev_tbl     | regclass |           |          |         | plain    |              | 
- prev_itemptr | bytea    |           |          |         | extended |              | 
-
  
+select * From np_vertex_21_2_1_linked_list;
+ id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
+----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
+(0 rows)
+
+select * From np_vertex_21_2_2_linked_list;
+ERROR:  relation "np_vertex_21_2_2_linked_list" does not exist
+LINE 1: select * From np_vertex_21_2_2_linked_list;
+                      ^
+select * From np_vertex_21_1_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl           |  next_itemptr  |           prev_tbl           |  prev_itemptr  
+----+----------+------+----------+----------+-----------+------------------------------+----------------+------------------------------+----------------
+  0 |        1 |      |        1 |        2 |         1 | -                            | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,3)
+  0 |        1 | \x01 |        2 |        1 |         1 | -                            | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,4)
+  1 |        1 |      |        1 |        2 |         1 | np_vertex_21_1_1_linked_list | (0,1)          | -                            | (4294967295,0)
+  1 |        1 | \x01 |        2 |        1 |         1 | np_vertex_21_1_1_linked_list | (0,2)          | -                            | (4294967295,0)
+(4 rows)
+
+select * From np_vertex_21_1_2_linked_list;
+ERROR:  relation "np_vertex_21_1_2_linked_list" does not exist
+LINE 1: select * From np_vertex_21_1_2_linked_list;
+                      ^
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_1_1_1_linked_list;
+ERROR:  relation "np_vertex_1_1_1_linked_list" does not exist
+LINE 1: select * From np_vertex_1_1_1_linked_list;
+                      ^
 SELECT * FROM public.np_edge_21_1;
  id |                                         edge                                          
 ----+---------------------------------------------------------------------------------------
   0 | {"id": 0, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
   1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+(2 rows)
+
+SELECT insert_vertex(
+  vertex_build(1, 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+);
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(
+  vertex_build(2, 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+);
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      2::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select rotate_active_linked_list_table('vertex_graph', 2);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_2_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid | next_tbl |  next_itemptr  |           prev_tbl           | prev_itemptr 
+----+----------+------+----------+----------+-----------+----------+----------------+------------------------------+--------------
+  2 |        1 |      |        1 |        2 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,1)
+  2 |        1 | \x01 |        2 |        1 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,2)
+(2 rows)
+
+select * From np_vertex_21_2_2_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl           | next_itemptr | prev_tbl |  prev_itemptr  
+----+----------+------+----------+----------+-----------+------------------------------+--------------+----------+----------------
+  3 |        1 |      |        1 |        2 |         2 | np_vertex_21_2_1_linked_list | (0,1)        | -        | (4294967295,0)
+  3 |        1 | \x01 |        2 |        1 |         2 | np_vertex_21_2_1_linked_list | (0,2)        | -        | (4294967295,0)
+(2 rows)
+
+select compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_2_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid | next_tbl |  next_itemptr  |           prev_tbl           | prev_itemptr 
+----+----------+------+----------+----------+-----------+----------+----------------+------------------------------+--------------
+  2 |        1 |      |        1 |        2 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,1)
+  2 |        1 | \x01 |        2 |        1 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,2)
+(2 rows)
+
+select * From np_vertex_21_2_2_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |         next_tbl         | next_itemptr | prev_tbl |  prev_itemptr  
+----+----------+------+----------+----------+-----------+--------------------------+--------------+----------+----------------
+  3 |        1 |      |        1 |        2 |         2 | np_vertex_21_2_arraylist | (0,1)        | -        | (4294967295,0)
+  3 |        1 | \x01 |        2 |        1 |         2 | np_vertex_21_2_arraylist | (0,2)        | -        | (4294967295,0)
+(2 rows)
+
+SELECT * FROM np_vertex_21_2_arraylist;
+ id |          prev_table          | prev_itemptr |                                                                  adj_list                                                                   |  next_itemptr  
+----+------------------------------+--------------+---------------------------------------------------------------------------------------------------------------------------------------------+----------------
+  1 | np_vertex_21_2_2_linked_list | (0,1)        | [{"edge_id": 2, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 800, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  2 | np_vertex_21_2_2_linked_list | (0,2)        | [{"edge_id": 2, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 800, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+(2 rows)
+
+SELECT create_vlabel('vertex_graph', 'thirdLabel');
+NOTICE:  vlabel "vertex_graph" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(
+  vertex_build(1, 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+);
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(
+  vertex_build(2, 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+);
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select insert_edge(
+  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+select insert_edge(
+  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      3::int8, 21, 1, 0::smallint, 
+      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+select * from np_vertex_21_3_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_3_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_3_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_3_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl           |  next_itemptr  |           prev_tbl           |  prev_itemptr  
+----+----------+------+----------+----------+-----------+------------------------------+----------------+------------------------------+----------------
+  3 |        1 |      |        1 |        2 |         3 | -                            | (4294967295,0) | np_vertex_21_3_1_linked_list | (0,3)
+  3 |        1 | \x01 |        2 |        1 |         3 | -                            | (4294967295,0) | np_vertex_21_3_1_linked_list | (0,4)
+  3 |        1 |      |        1 |        2 |         3 | np_vertex_21_3_1_linked_list | (0,1)          | -                            | (4294967295,0)
+  3 |        1 | \x01 |        2 |        1 |         3 | np_vertex_21_3_1_linked_list | (0,2)          | -                            | (4294967295,0)
+(4 rows)
+
+select rotate_active_linked_list_table('vertex_graph', 3);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+select compact_oldest_linked_list_table('vertex_graph', 3);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_3_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl           |  next_itemptr  |           prev_tbl           |  prev_itemptr  
+----+----------+------+----------+----------+-----------+------------------------------+----------------+------------------------------+----------------
+  3 |        1 |      |        1 |        2 |         3 | -                            | (4294967295,0) | np_vertex_21_3_1_linked_list | (0,3)
+  3 |        1 | \x01 |        2 |        1 |         3 | -                            | (4294967295,0) | np_vertex_21_3_1_linked_list | (0,4)
+  3 |        1 |      |        1 |        2 |         3 | np_vertex_21_3_1_linked_list | (0,1)          | -                            | (4294967295,0)
+  3 |        1 | \x01 |        2 |        1 |         3 | np_vertex_21_3_1_linked_list | (0,2)          | -                            | (4294967295,0)
+(4 rows)
+
+select * From np_vertex_21_3_2_linked_list;
+ id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
+----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
+(0 rows)
+
+SELECT * FROM np_vertex_21_3_arraylist;
+ id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
+----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
+  1 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 808, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 808, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
 (2 rows)
 
 SELECT * FROM public.np_vertex_21_1;
