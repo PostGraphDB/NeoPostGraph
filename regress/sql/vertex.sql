@@ -205,7 +205,14 @@ select * From np_vertex_21_2_1_linked_list;
 select * From np_vertex_21_2_2_linked_list;
 SELECT * FROM np_vertex_21_2_arraylist;
 
-
+select rotate_active_linked_list_table('vertex_graph', 2);
+select compact_oldest_linked_list_table('vertex_graph', 2);
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_2_1_linked_list;
+select * From np_vertex_21_2_2_linked_list;
+select * From np_vertex_21_2_3_linked_list;
+select * from np_vertex_21_2_linked_list_meta;
+SELECT * FROM np_vertex_21_2_arraylist;
 
 
 SELECT create_vlabel('vertex_graph', 'thirdLabel');

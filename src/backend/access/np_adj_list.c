@@ -2,6 +2,7 @@
 #include "fmgr.h"
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "catalog/indexing.h"
 #include "catalog/pg_type.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
@@ -22,6 +23,99 @@ typedef struct CompactedVertexEntry {
     Oid downstream_tbl;             
     ItemPointerData downstream_tid;
 } CompactedVertexEntry;
+
+static AdjList *
+np_append_adj_list(AdjList *list, AdjListMember *member);
+
+/*
+ * np_merge_existing_arraylist
+ * Fetches an existing arraylist block, appends its contents to the new AdjList,
+ * deletes the old block, and returns the next pointer in the arraylist chain.
+ */
+static ItemPointerData
+np_merge_existing_arraylist(Relation array_rel, ItemPointerData *target_tid, AdjList **adj)
+{
+    ItemPointerData next_tid;
+    ItemPointerSetInvalid(&next_tid);
+
+    if (!ItemPointerIsValid(target_tid))
+        return next_tid;
+
+    Buffer buffer = ReadBuffer(array_rel, ItemPointerGetBlockNumber(target_tid));
+    LockBuffer(buffer, BUFFER_LOCK_SHARE);
+    Page page = BufferGetPage(buffer);
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(target_tid));
+
+    if (ItemIdIsNormal(lp))
+    {
+        HeapTupleData oldtup;
+        oldtup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
+        oldtup.t_len = ItemIdGetLength(lp);
+        oldtup.t_self = *target_tid;
+        oldtup.t_tableOid = RelationGetRelid(array_rel);
+
+        TupleDesc tupdesc = RelationGetDescr(array_rel);
+        bool isnull;
+
+        /* 1. Extract the next pointer in the chain to maintain continuity */
+        Datum old_next = heap_getattr(&oldtup, 5, tupdesc, &isnull);
+        if (!isnull)
+        {
+            ItemPointer ip = (ItemPointer) DatumGetPointer(old_next);
+            next_tid = *ip;
+        }
+
+        /* 2. Extract, detoast, and merge the old adjacency list */
+        Datum old_adj_datum = heap_getattr(&oldtup, 4, tupdesc, &isnull);
+        if (!isnull)
+        {
+            AdjList *old_adj = DATUM_GET_ADJ_LIST(old_adj_datum);
+            for (int i = 0; i < old_adj->nitems; i++)
+            {
+                /* Safely update the pointer via double indirection */
+                *adj = np_append_adj_list(*adj, &old_adj->data[i]);
+            }
+        }
+    }
+    UnlockReleaseBuffer(buffer);
+
+    /* 3. Delete the old compacted block since its data is now merged */
+    simple_heap_delete(array_rel, target_tid);
+
+    return next_tid;
+}
+
+/*
+ * np_insert_arraylist_block
+ * Inserts a fully formed arraylist into the table and returns its physical TID.
+ */
+static ItemPointerData
+np_insert_arraylist_block(Relation array_rel,
+                          uint64 vertex_id,
+                          AdjList *adj,
+                          Oid prev_tbl,
+                          ItemPointerData *prev_tid,
+                          ItemPointerData *next_tid)
+{
+    Datum values[5];
+    bool nulls[5] = {false, false, false, false, false};
+    ItemPointerData invalid_tid;
+    ItemPointerSetInvalid(&invalid_tid);
+
+    values[0] = Int64GetDatum(vertex_id);
+    values[1] = OidIsValid(prev_tbl) ? ObjectIdGetDatum(prev_tbl) : ObjectIdGetDatum(InvalidOid);
+    values[2] = ItemPointerIsValid(prev_tid) ? PointerGetDatum(prev_tid) : PointerGetDatum(&invalid_tid);
+    values[3] = PointerGetDatum(adj);
+    values[4] = ItemPointerIsValid(next_tid) ? PointerGetDatum(next_tid) : PointerGetDatum(&invalid_tid);
+
+    HeapTuple newtup = heap_form_tuple(RelationGetDescr(array_rel), values, nulls);
+    
+    simple_heap_insert(array_rel, newtup);
+    ItemPointerData new_array_tid = newtup->t_self;
+
+    heap_freetuple(newtup);
+    return new_array_tid;
+}
 
 static AdjList *
 np_init_adj_list(int32 initial_capacity)
@@ -79,10 +173,12 @@ get_oldest_inactive_linked_list(Oid meta_oid)
     int64 oldest_id = PG_INT64_MAX;
     while (HeapTupleIsValid(tuple = systable_getnext(scan)))
     {
-        bool isnull;
+        bool isnull; 
+
         bool active = DatumGetBool(heap_getattr(tuple, 3, RelationGetDescr(meta_rel), &isnull));
+        bool compacted = DatumGetBool(heap_getattr(tuple, 4, RelationGetDescr(meta_rel), &isnull));
         
-        if (!active && !isnull)
+        if (!active && !compacted)
         {
             int64 current_id = DatumGetInt64(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
             
@@ -242,12 +338,11 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
             }
 
             AdjListMember member = {
-                .xmin = rec->xmin, .xmax = rec->xmax,
-                .cmin = rec->cmin, .cmax = rec->cmax,
-                .flags = 0,
+                .xmin = rec->xmin,         .xmax = rec->xmax,
+                .cmin = rec->cmin,         .cmax = rec->cmax,
+                .flags = 0,                .dir = rec->dir,
                 .edge_id = rec->id,        .edge_lid = rec->edge_lid,
-                .other_id = rec->other_id, .other_lid = rec->other_lid,
-                .dir = rec->dir 
+                .other_id = rec->other_id, .other_lid = rec->other_lid
             };
 
             entry->adj = np_append_adj_list(entry->adj, &member);
@@ -257,7 +352,7 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
                 entry->upstream_tid = rec->prev_itemptr;
             }
 
-            if (rec->next_tbl != oldest_ll_oid) {
+            if (rec->next_tbl != oldest_ll_oid && rec->next_tbl != InvalidOid) {
                 Assert(!OidIsValid(rec->next_tbl) || rec->next_tbl == arraylist_oid);
                 entry->downstream_tbl = rec->next_tbl;
                 entry->downstream_tid = rec->next_itemptr;
@@ -273,12 +368,27 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
 
     while ((entry = hash_seq_search(&hash_seq)) != NULL)
     {
-        ItemPointerData new_array_tid = np_merge_and_insert_arraylist_block(
-            arraylist_oid, entry->owner_id, entry->adj,
+        Relation array_rel = table_open(arraylist_oid, RowExclusiveLock);
+        
+        ItemPointerData next_array_tid;
+        ItemPointerSetInvalid(&next_array_tid);
+
+        /* 1. If we captured a downstream pointer, fetch and merge it */
+        if (ItemPointerIsValid(&entry->downstream_tid))
+        {
+            next_array_tid = np_merge_existing_arraylist(array_rel, &entry->downstream_tid, &entry->adj);
+        }
+
+        /* 2. Insert the newly packed arraylist block */
+        ItemPointerData new_array_tid = np_insert_arraylist_block(
+            array_rel, entry->owner_id, entry->adj,
             entry->upstream_tbl, &entry->upstream_tid,
-            &entry->downstream_tid, cid
+            &next_array_tid
         );
 
+        table_close(array_rel, RowExclusiveLock);
+
+        /* 3. Update upstream links to point at the new block */
         if (OidIsValid(entry->upstream_tbl)) {
             Relation upstream_rel = table_open(entry->upstream_tbl, RowExclusiveLock);
             np_update_next_pointer_inplace(upstream_rel, &entry->upstream_tid, 
@@ -290,10 +400,40 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
             table_close(pmap_rel, RowExclusiveLock);
         }
 
+        /* Because we used double indirection in the merge, this pfree is 100% safe */
         pfree(entry->adj);
     }
 
     hash_destroy(vertex_hash);
+
+/* Mark the processed table as compacted */
+    Relation meta_rel = table_open(label->linked_list_meta, RowExclusiveLock);
+    SysScanDesc meta_scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    HeapTuple meta_tuple;
+
+    while (HeapTupleIsValid(meta_tuple = systable_getnext(meta_scan)))
+    {
+        bool isnull;
+        Oid tbl = DatumGetObjectId(heap_getattr(meta_tuple, 2, RelationGetDescr(meta_rel), &isnull));
+        
+        if (tbl == oldest_ll_oid)
+        {
+            Datum values[4];
+            bool nulls[4];
+            bool replace[4] = {false, false, false, true};
+
+            values[3] = BoolGetDatum(true);
+            nulls[3] = false;
+
+            HeapTuple newtup = heap_modify_tuple(meta_tuple, RelationGetDescr(meta_rel), 
+                                                 values, nulls, replace);
+            CatalogTupleUpdate(meta_rel, &meta_tuple->t_self, newtup);
+            heap_freetuple(newtup);
+            break;
+        }
+    }
+    systable_endscan(meta_scan);
+    table_close(meta_rel, RowExclusiveLock);
 
     PG_RETURN_VOID();
 }

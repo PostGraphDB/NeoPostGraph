@@ -367,12 +367,13 @@ int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl)
 {
     Relation rel = table_open(get_relname_relid(table_name, namespace), RowExclusiveLock);
 
-    Datum values[3] = {
+    Datum values[4] = {
         ObjectIdGetDatum(tbl),
         Int32GetDatum(ll_seq),
-        BoolGetDatum(true)
+        BoolGetDatum(true),
+        BoolGetDatum(false)
     };
-    bool nulls[3] = { false, false, false };
+    bool nulls[4] = { false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
@@ -744,11 +745,11 @@ create_vertex_label_linked_list_metadata_table(char *tbl_name, Oid namespace)
 
     create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
 
-    /* Fixed columns + one variable column (bytea for adjacency list) */
-    create_stmt->tableElts = list_make3(
+    create_stmt->tableElts = list_make4(
         makeColumnDef("id", INT4OID, -1, InvalidOid),
         makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid),
-        makeColumnDef("active", BOOLOID, -1, InvalidOid)
+        makeColumnDef("active", BOOLOID, -1, InvalidOid),
+        makeColumnDef("compacted", BOOLOID, -1, InvalidOid)
     );
 
     create_stmt->accessMethod = NULL;
@@ -1059,7 +1060,7 @@ void create_metadata_gist_index(char *tbl_name)
 Oid
 create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll_meta_oid, Oid namespace_oid)
 {
-    if (!OidIsValid(ll_seq_oid) || !OidIsValid(ll_meta_oid))
+if (!OidIsValid(ll_seq_oid) || !OidIsValid(ll_meta_oid))
         ereport(ERROR, (errmsg("Invalid linked_list_seq or linked_list_meta OID")));
 
     Oid partition_id = DatumGetObjectId(
@@ -1085,9 +1086,9 @@ create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll
 
         if (active)
         {
-            Datum values[3];
-            bool nulls[3];
-            bool replace[3] = {false, false, true};
+            Datum values[4];
+            bool nulls[4];
+            bool replace[4] = {false, false, true, false}; 
 
             values[2] = BoolGetDatum(false);
             nulls[2] = false;
@@ -1101,18 +1102,17 @@ create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll
     }
     systable_endscan(scan);
 
-    
-    Datum values[3];
-    bool nulls[3] = {false, false, false};
+    Datum values[4];
+    bool nulls[4] = {false, false, false, false};
 
     values[0] = Int32GetDatum(partition_id);     // id
     values[1] = ObjectIdGetDatum(new_list_oid);  // tbl
     values[2] = BoolGetDatum(true);              // active
+    values[3] = BoolGetDatum(false);             // compacted
 
     HeapTuple newtup = heap_form_tuple(RelationGetDescr(meta_rel), values, nulls);
     CatalogTupleInsert(meta_rel, newtup);
     heap_freetuple(newtup);
-    
 
     table_close(meta_rel, RowExclusiveLock);
     CommandCounterIncrement();
