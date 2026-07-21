@@ -215,6 +215,10 @@ select * from np_vertex_21_2_linked_list_meta;
 SELECT * FROM np_vertex_21_2_arraylist;
 
 
+select compact_oldest_linked_list_table('vertex_graph', 2);
+select compact_oldest_linked_list_table('vertex_graph', 2);
+select compact_oldest_linked_list_table('vertex_graph', 2);
+
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
 SELECT insert_vertex(
   vertex_build(1, 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)

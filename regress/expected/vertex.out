@@ -649,6 +649,24 @@ SELECT * FROM np_vertex_21_2_arraylist;
   2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 802, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 2, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 800, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
 (2 rows)
 
+select compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+select compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+select compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
 NOTICE:  vlabel "vertex_graph" has been created
  create_vlabel 
@@ -759,8 +777,8 @@ select * From np_vertex_21_3_2_linked_list;
 SELECT * FROM np_vertex_21_3_arraylist;
  id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
 ----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 810, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 810, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  1 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 812, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 812, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
 (2 rows)
 
 SELECT * FROM public.np_vertex_21_1;

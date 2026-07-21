@@ -26,6 +26,8 @@ typedef struct CompactedVertexEntry {
 
 static AdjList *
 np_append_adj_list(AdjList *list, AdjListMember *member);
+extern Oid create_new_active_linked_list(int graph_id, int label_id, Oid ll_seq_oid, Oid ll_meta_oid, Oid namespace_oid);
+
 
 /*
  * np_merge_existing_arraylist
@@ -299,9 +301,28 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
     Oid arraylist_oid = label->arraylist;
     
     Oid oldest_ll_oid = get_oldest_inactive_linked_list(label->linked_list_meta);
+    
+    /* 
+     * Auto-Rotate Logic: If there are no pending uncompacted tables, 
+     * force the currently active table to rotate out, then grab it.
+     */
     if (!OidIsValid(oldest_ll_oid))
-        PG_RETURN_VOID();
+    {
+        create_new_active_linked_list(
+            graph->id, 
+            label_id, 
+            label->linked_list_seq, 
+            label->linked_list_meta, 
+            namespace
+        );
 
+        /* Re-fetch the ID of the table we just forced into an inactive state */
+        oldest_ll_oid = get_oldest_inactive_linked_list(label->linked_list_meta);
+        
+        /* If it's STILL invalid (e.g., catalog corruption), bail safely */
+        if (!OidIsValid(oldest_ll_oid))
+        ereport(ERROR, (errmsg("NeoPostGraph: Compaction failed to successfully rotate the label")));
+    }
     HASHCTL hash_ctl;
     memset(&hash_ctl, 0, sizeof(hash_ctl));
     hash_ctl.keysize = sizeof(uint64);
