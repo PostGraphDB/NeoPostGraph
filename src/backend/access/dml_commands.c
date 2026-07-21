@@ -23,6 +23,7 @@
 #include "access/heapam.h"
 #include "access/hio.h"
 #include "access/genam.h"
+#include "access/generic_xlog.h"
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "access/xact.h"
@@ -72,60 +73,54 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
     Page page;
     OffsetNumber offnum;
     BlockNumber blockNum;
+    GenericXLogState *state;
+    int flags = 0;
 
-    // For now, just grab the last block of the relation.
-    // TODO: Free Space Map to reuse ids after delete is made
     blockNum = RelationGetNumberOfBlocks(rel);
     
     if (blockNum == 0) {
-        // Table is completely empty, extend it by 1 block
         buffer = ReadBuffer(rel, P_NEW);
-        blockNum = BufferGetBlockNumber(buffer);
     } else {
-        // Read the last block
         buffer = ReadBuffer(rel, blockNum - 1);
-        blockNum = BufferGetBlockNumber(buffer);
     }
 
-    // Lock the buffer exclusively so no one else writes to it at the same time
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
     page = BufferGetPage(buffer);
 
-    // If the page is brand new, initialize its header
-    if (PageIsNew(page)) {
-        PageInit(page, BufferGetPageSize(buffer), 0);
-    }
-
-    // Attempt to add the item to the page
-    offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-
-    if (offnum == InvalidOffsetNumber) {
-        // The page is full! We need to extend the file and try again.
+    Size space_needed = MAXALIGN(data_size) + sizeof(ItemIdData);
+    if (!PageIsNew(page) && PageGetFreeSpace(page) < space_needed) {
         UnlockReleaseBuffer(buffer);
         
         buffer = ReadBuffer(rel, P_NEW);
         LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
         page = BufferGetPage(buffer);
-        PageInit(page, BufferGetPageSize(buffer), 0);
-        
-        offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-        blockNum = BufferGetBlockNumber(buffer);
-        
-        if (offnum == InvalidOffsetNumber)
-            elog(ERROR, "NeoPostGraph: Failed to add tuple to new page");
     }
 
-    // Record the physical address
-    ItemPointerSet(out_tid, blockNum, offnum);
+    state = GenericXLogStart(rel);
 
-    // Mark the buffer dirty so Postgres knows it needs to be written to disk
-    MarkBufferDirty(buffer);
+    if (PageIsNew(page)) {
+        flags = GENERIC_XLOG_FULL_IMAGE;
+    }
     
-    // (Note: WAL logging code would go exactly here before unlocking)
+    page = GenericXLogRegisterBuffer(state, buffer, flags);
 
+    if (PageIsNew(page)) {
+        PageInit(page, BufferGetPageSize(buffer), 0);
+    }
+
+    offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+
+    if (offnum == InvalidOffsetNumber) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: Failed to add tuple to new page despite free space check");
+    }
+
+    GenericXLogFinish(state);
+
+    ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
     UnlockReleaseBuffer(buffer);
 }
-
 static bytea *
 make_itemptr_bytea(const ItemPointerData *ip)
 {
@@ -432,12 +427,17 @@ update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_o
         elog(ERROR, "NeoPostGraph: phys_map positional update failed");
     }
 
+    GenericXLogState *state = GenericXLogStart(pmap_rel);
+    
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
     NeoPhysMapRecord *disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+    
     disk_rec->e_tbl_id = new_edge_table_oid;
     disk_rec->e_itemptr = *new_edge_tid;
 
-    MarkBufferDirty(buffer);
-    // (WAL logging here)
+    GenericXLogFinish(state);
 
     UnlockReleaseBuffer(buffer);
 }
@@ -556,14 +556,17 @@ update_edge_prev_pointer(Relation rel, ItemPointer old_head_tid, Oid prev_table_
         elog(ERROR, "NeoPostGraph: attempted to update prev pointer on a dead or invalid tuple");
     }
 
+    GenericXLogState *state = GenericXLogStart(rel);
+    
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(old_head_tid));
     NeoLinkedListRecord *disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
 
     disk_rec->prev_tbl = prev_table_oid;
     disk_rec->prev_itemptr = *new_head_tid;
 
-    MarkBufferDirty(buffer);
-    
-    /* (WAL logging for the pointer mutation goes here) */
+    GenericXLogFinish(state);
 
     UnlockReleaseBuffer(buffer);
 }
@@ -618,7 +621,6 @@ static ItemPointerData get_current_head_tid(Relation pmap_rel, uint64 vertex_id,
     ItemPointerSetInvalid(&head_tid);
     if (head_tbl) *head_tbl = InvalidOid;
 
-    /* FIX: Must match np_write_record_to_page exactly */
     Size payload_size = sizeof(NeoPhysMapRecord);
     uint32 tuples_per_page = np_calculate_tuples_per_page(payload_size);
 

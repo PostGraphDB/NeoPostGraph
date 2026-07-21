@@ -1,6 +1,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "access/genam.h"
+#include "access/generic_xlog.h"
 #include "access/heapam.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_type.h"
@@ -153,14 +154,24 @@ np_update_next_pointer_inplace(Relation rel, ItemPointer tid,
     Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
     Page page = BufferGetPage(buffer);
+
     ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
 
-    if (ItemIdIsNormal(lp)) {
-        NeoLinkedListRecord *disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
-        disk_rec->next_tbl = new_next_tbl;
-        disk_rec->next_itemptr = *new_next_tid;
-        MarkBufferDirty(buffer);
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: attempted in-place update on invalid or dead tuple during compaction");
     }
+
+    GenericXLogState *state = GenericXLogStart(rel);
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    NeoLinkedListRecord *disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+
+    disk_rec->next_tbl = new_next_tbl;
+    disk_rec->next_itemptr = *new_next_tid;
+
+    GenericXLogFinish(state);
+
     UnlockReleaseBuffer(buffer);
 }
 
@@ -301,11 +312,6 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
     Oid arraylist_oid = label->arraylist;
     
     Oid oldest_ll_oid = get_oldest_inactive_linked_list(label->linked_list_meta);
-    
-    /* 
-     * Auto-Rotate Logic: If there are no pending uncompacted tables, 
-     * force the currently active table to rotate out, then grab it.
-     */
     if (!OidIsValid(oldest_ll_oid))
     {
         create_new_active_linked_list(
@@ -316,13 +322,12 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
             namespace
         );
 
-        /* Re-fetch the ID of the table we just forced into an inactive state */
         oldest_ll_oid = get_oldest_inactive_linked_list(label->linked_list_meta);
-        
-        /* If it's STILL invalid (e.g., catalog corruption), bail safely */
+
         if (!OidIsValid(oldest_ll_oid))
         ereport(ERROR, (errmsg("NeoPostGraph: Compaction failed to successfully rotate the label")));
     }
+
     HASHCTL hash_ctl;
     memset(&hash_ctl, 0, sizeof(hash_ctl));
     hash_ctl.keysize = sizeof(uint64);

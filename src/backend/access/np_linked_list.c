@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "access/tableam.h"
+#include "access/generic_xlog.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
@@ -138,63 +139,54 @@ np_linked_list_slot_callbacks(Relation rel)
 static void 
 np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
 {
+    BlockNumber blockNum = RelationGetNumberOfBlocks(rel);
+
     Buffer buffer;
-    Page page;
-    OffsetNumber offnum;
-    BlockNumber blockNum;
-
-    // For simplicity, we just grab the last block of the relation. 
-    // In a production graph engine, you would use a Free Space Map (FSM) here.
-    blockNum = RelationGetNumberOfBlocks(rel);
-    
     if (blockNum == 0) {
-        // Table is completely empty, extend it by 1 block
         buffer = ReadBuffer(rel, P_NEW);
-        blockNum = BufferGetBlockNumber(buffer);
     } else {
-        // Read the last block
         buffer = ReadBuffer(rel, blockNum - 1);
-        blockNum = BufferGetBlockNumber(buffer);
     }
 
-    // Lock the buffer exclusively so no one else writes to it at the same time
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    page = BufferGetPage(buffer);
+    Page page = BufferGetPage(buffer);
 
-    // If the page is brand new, initialize its header
-    if (PageIsNew(page)) {
-        PageInit(page, BufferGetPageSize(buffer), 0);
-    }
-
-    // Attempt to add the item to the page
-    offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-
-    if (offnum == InvalidOffsetNumber) {
-        // The page is full! We need to extend the file and try again.
+    Size space_needed = MAXALIGN(data_size) + sizeof(ItemIdData);
+    if (!PageIsNew(page) && PageGetFreeSpace(page) < space_needed) {
         UnlockReleaseBuffer(buffer);
         
         buffer = ReadBuffer(rel, P_NEW);
         LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
         page = BufferGetPage(buffer);
-        PageInit(page, BufferGetPageSize(buffer), 0);
-        
-        offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-        blockNum = BufferGetBlockNumber(buffer);
-        
-        if (offnum == InvalidOffsetNumber)
-            elog(ERROR, "NeoPostGraph: Failed to add tuple to new page");
     }
 
-    // Record the physical address
-    ItemPointerSet(out_tid, blockNum, offnum);
+    GenericXLogState *state = GenericXLogStart(rel);
 
-    // Mark the buffer dirty so Postgres knows it needs to be written to disk
-    MarkBufferDirty(buffer);
+    int flags = 0;
+    if (PageIsNew(page)) {
+        flags = GENERIC_XLOG_FULL_IMAGE;
+    }
     
-    // (Note: WAL logging code would go exactly here before unlocking)
+    page = GenericXLogRegisterBuffer(state, buffer, flags);
 
+    if (PageIsNew(page)) {
+        PageInit(page, BufferGetPageSize(buffer), 0);
+    }
+
+    OffsetNumber offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+
+    if (offnum == InvalidOffsetNumber) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: Failed to add tuple to page despite free space check");
+    }
+
+    GenericXLogFinish(state);
+
+    ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
     UnlockReleaseBuffer(buffer);
 }
+
 static void 
 np_linked_list_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
                                     int options, BulkInsertState bistate) 
@@ -244,46 +236,34 @@ np_linked_list_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Com
 static void
 np_overwrite_record_in_page(Relation rel, ItemPointer tid, NeoLinkedListRecord *new_data)
 {
-    Buffer buffer;
-    Page page;
-    ItemId lp;
-    NeoLinkedListRecord *disk_rec;
-
-    /* Read the specific block that holds the old tuple */
-    buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
     
-    /* Lock it exclusively so no one reads it while we are writing */
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    page = BufferGetPage(buffer);
+    Page page = BufferGetPage(buffer);
     
-    /* Find the exact line pointer for our record */
-    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
 
     if (!ItemIdIsNormal(lp)) {
         UnlockReleaseBuffer(buffer);
         elog(ERROR, "NeoPostGraph: attempted to in-place update an invalid or dead tuple");
     }
 
-    /* Cast the raw page memory directly to our C struct */
-    disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+    GenericXLogState *state = GenericXLogStart(rel);
 
-    /* 
-     * CRITICAL: Because this is an IN-PLACE update, we must preserve 
-     * the original Micro-MVCC header. If we overwrite xmin with a new one,
-     * older transactions will suddenly think this row is invisible!
-     */
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    NeoLinkedListRecord *disk_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+
+
     new_data->xmin = disk_rec->xmin;
     new_data->cmin = disk_rec->cmin;
     new_data->xmax = disk_rec->xmax;
     new_data->cmax = disk_rec->cmax;
 
-    /* Overwrite the 45-byte disk record with our newly formed stack record */
     memcpy(disk_rec, new_data, sizeof(NeoLinkedListRecord));
 
-    /* Mark the buffer dirty so the background writer flushes it to disk */
-    MarkBufferDirty(buffer);
-    
-    /* (WAL logging for the update would go here) */
+    GenericXLogFinish(state);
 
     UnlockReleaseBuffer(buffer);
 }
