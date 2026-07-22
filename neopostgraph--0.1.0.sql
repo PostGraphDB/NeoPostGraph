@@ -285,6 +285,12 @@ CREATE ACCESS METHOD NPLinkedList
 TYPE TABLE 
 HANDLER np_linked_list_mutable_handler;
 
+CREATE OR REPLACE FUNCTION np_entity_store_handler(internal)
+RETURNS table_am_handler
+AS 'MODULE_PATHNAME', 'np_entity_store_handler'
+LANGUAGE C STRICT;
+
+CREATE ACCESS METHOD entity_store TYPE TABLE HANDLER np_entity_store_handler;
 
 CREATE FUNCTION rotate_active_linked_list_table(graph_name Name, label_id int)
 RETURNS void 

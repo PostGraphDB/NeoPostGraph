@@ -18,6 +18,7 @@ MODULE_big = neopostgraph
 
 OBJS = src/backend/neopostgraph.o \
        src/backend/access/dml_commands.o \
+       src/backend/access/np_entity_store.o \
        src/backend/access/np_adj_list.o \
        src/backend/access/np_linked_list.o \
        src/backend/access/np_phys_map.o \

@@ -45,6 +45,8 @@
 #include "utils/edge.h"
 
 #include "access/np_linked_list.h"
+#include "access/np_entity_store.h"
+
 static Datum
 itemptr_to_bytea(ItemPointer iptr);
 void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
@@ -136,6 +138,7 @@ insert_vertex(PG_FUNCTION_ARGS)
 {
     vertex *v = NP_GET_ARG_VERTEX(0);
     CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
 
     const label_cache_data *label_cache =
         search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
@@ -146,23 +149,43 @@ insert_vertex(PG_FUNCTION_ARGS)
                  errmsg("label not found: graph_id=%d, label_id=%d",
                         v->graph_id, v->label_id)));
 
-    Datum values[2]= { Int64GetDatum(v->id), PointerGetDatum(v) };
-    bool nulls[2] = {false, false};
-    
+    /* 1. Open the custom entity_store table */
     Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
 
-    HeapTuple tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
-    tup->t_tableOid = RelationGetRelid(rel);
+    /* 
+     * 2. Calculate explicit byte size.
+     * Assuming 'vertex' is a standard varlena, VARSIZE() gives us the payload length.
+     */
+    Size payload_size = VARSIZE(v);
+    Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
+    
+    /* 3. Allocate and format the custom physical tuple */
+    char *tuple_buf = (char *) palloc0(total_tuple_size);
+    NPEntityTupleHeader hdr = (NPEntityTupleHeader) tuple_buf;
 
-    np_heap_insert(rel, tup, cid, 0, NULL);
+    hdr->xmin = current_fxid;
+    hdr->xmax = InvalidFullTransactionId;
+    hdr->cmin = cid;
+    hdr->cmax = InvalidCommandId;
+    ItemPointerSetInvalid(&hdr->prev_itemptr);
+    hdr->flags = 0;
+    hdr->id = v->id;
 
-    ItemPointerData v_itemptr = tup->t_self;
+    /* Drop the serialized vertex payload directly behind the 40-byte header */
+    memcpy(hdr->serialized_entity, v, payload_size);
 
+    /* 4. Write directly to the page using your existing primitive */
+    ItemPointerData v_itemptr;
+    np_write_record_to_page(rel, tuple_buf, total_tuple_size, &v_itemptr);
+
+    pfree(tuple_buf);
     table_close(rel, RowExclusiveLock);
 
+    /* 5. Update the phys_map with the new topology pointer */
     Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+    
     NeoPhysMapRecord rec = {
-        .xmin = GetTopFullTransactionId(),
+        .xmin = current_fxid,
         .cmin = cid,
         .xmax = InvalidFullTransactionId,
         .cmax = InvalidCommandId,
@@ -175,6 +198,7 @@ insert_vertex(PG_FUNCTION_ARGS)
     np_write_record_to_page(pmap_rel, (char *) &rec, sizeof(NeoPhysMapRecord), &dummy_tid);
 
     table_close(pmap_rel, RowExclusiveLock);
+    
     PG_RETURN_VOID();
 }
 
@@ -187,6 +211,7 @@ insert_edge(PG_FUNCTION_ARGS)
     edge *e = NP_GET_ARG_EDGE(2);
 
     CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
 
     const label_cache_data *edge_label =
         search_edge_label_graph_id_label_id_cache(e->graph_id, e->label_id);
@@ -194,18 +219,39 @@ insert_edge(PG_FUNCTION_ARGS)
     if (!edge_label || !OidIsValid(edge_label->vertex_tbl))
         ereport(ERROR, (errmsg("Edge label table not found")));
 
+    /* 1. Open the custom entity_store edge table */
     Relation edge_rel = table_open(edge_label->vertex_tbl, RowExclusiveLock);
 
-    Datum edge_values[2] = { Int64GetDatum(e->id), PointerGetDatum(e) };
-    bool edge_nulls[2] = {false, false};
+    /* 
+     * 2. Calculate explicit byte size.
+     * Assuming 'edge' is a standard varlena, VARSIZE() gives us the payload length.
+     */
+    Size payload_size = VARSIZE(e);
+    Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
 
-    HeapTuple edge_tup = heap_form_tuple(RelationGetDescr(edge_rel), edge_values, edge_nulls);
-    edge_tup->t_tableOid = RelationGetRelid(edge_rel);
+    /* 3. Allocate and format the custom physical tuple */
+    char *tuple_buf = (char *) palloc0(total_tuple_size);
+    NPEntityTupleHeader hdr = (NPEntityTupleHeader) tuple_buf;
 
-    np_heap_insert(edge_rel, edge_tup, cid, 0, NULL);
+    hdr->xmin = current_fxid;
+    hdr->xmax = InvalidFullTransactionId;
+    hdr->cmin = cid;
+    hdr->cmax = InvalidCommandId;
+    ItemPointerSetInvalid(&hdr->prev_itemptr);
+    hdr->flags = 0;
+    hdr->id = e->id;
+
+    /* Drop the serialized edge payload directly behind the 40-byte header */
+    memcpy(hdr->serialized_entity, e, payload_size);
+
+    /* 4. Write directly to the page using your existing primitive */
+    ItemPointerData edge_tid;
+    np_write_record_to_page(edge_rel, tuple_buf, total_tuple_size, &edge_tid);
+
+    pfree(tuple_buf);
     table_close(edge_rel, RowExclusiveLock);
 
-
+    /* 5. Update the doubly-linked adjacency lists on the start and end vertices */
     insert_edge_one_direction(start_v, end_v, e, 0, cid);
     insert_edge_one_direction(end_v, start_v, e, 1, cid);
 

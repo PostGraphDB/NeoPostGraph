@@ -263,6 +263,7 @@ Oid create_vertex_tables(int graph_id, int label_id, Oid namespace) {
     vertex->constraints = list_make1(build_not_null_constraint());
 
     create_stmt->tableElts = list_make2(id, vertex);
+    create_stmt->accessMethod = "entity_store";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
@@ -299,6 +300,7 @@ Oid create_edge_tables(int graph_id, int label_id, Oid namespace) {
     edge->constraints = list_make1(build_not_null_constraint());
 
     create_stmt->tableElts = list_make2(id, edge);
+    create_stmt->accessMethod = "entity_store";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
