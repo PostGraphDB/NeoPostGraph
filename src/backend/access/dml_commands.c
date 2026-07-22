@@ -50,7 +50,6 @@
 static Datum
 itemptr_to_bytea(ItemPointer iptr);
 void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
-void np_heap_insert(Relation relation, HeapTuple tup, CommandId cid, int options, BulkInsertState bistate);
 
 static void insert_edge_one_direction(vertex *owner_v,
                                       vertex *other_v,
@@ -381,73 +380,6 @@ void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple
     ReleaseBuffer(buffer);
 }
 
-void
-np_heap_insert(Relation relation, HeapTuple tup, CommandId cid,
-                  int options, BulkInsertState bistate)
-{
-    TransactionId xid = GetCurrentTransactionId();
-    Buffer buffer;
-    Page page;
-
-    Assert(HeapTupleHeaderGetNatts(tup->t_data) <= RelationGetNumberOfAttributes(relation));
-
-    tup->t_data->t_infomask &= ~(HEAP_XACT_MASK);
-    tup->t_data->t_infomask2 &= ~(HEAP2_XACT_MASK);
-    tup->t_data->t_infomask |= HEAP_XMAX_INVALID;
-    HeapTupleHeaderSetXmin(tup->t_data, xid);
-    HeapTupleHeaderSetCmin(tup->t_data, cid);
-    HeapTupleHeaderSetXmax(tup->t_data, InvalidTransactionId);
-    tup->t_tableOid = RelationGetRelid(relation);
-
-    buffer = RelationGetBufferForTuple(relation, tup->t_len,
-                       InvalidBuffer, options, bistate,
-                       NULL, NULL, 0);
-
-    page = BufferGetPage(buffer);
-
-    START_CRIT_SECTION();
-
-    RelationPutHeapTuple(relation, buffer, tup, false);
-    MarkBufferDirty(buffer);
-
-    if (RelationNeedsWAL(relation))
-    {
-        xl_heap_insert xlrec;
-        xl_heap_header xlhdr;
-        XLogRecPtr recptr;
-        uint8 info = XLOG_HEAP_INSERT;
-        int bufflags = 0;
-
-        if (ItemPointerGetOffsetNumber(&(tup->t_self)) == FirstOffsetNumber &&
-            PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
-        {
-            info |= XLOG_HEAP_INIT_PAGE;
-            bufflags |= REGBUF_WILL_INIT;
-        }
-
-        xlrec.offnum = ItemPointerGetOffsetNumber(&tup->t_self);
-        xlrec.flags = 0;
-        
-        XLogBeginInsert();
-        XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
-
-        xlhdr.t_infomask2 = tup->t_data->t_infomask2;
-        xlhdr.t_infomask = tup->t_data->t_infomask;
-        xlhdr.t_hoff = tup->t_data->t_hoff;
-
-        XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
-        XLogRegisterBufData(0, (char *) &xlhdr, SizeOfHeapHeader);
-        XLogRegisterBufData(0, (char *) tup->t_data + SizeofHeapTupleHeader,
-                            tup->t_len - SizeofHeapTupleHeader);
-
-        recptr = XLogInsert(RM_HEAP_ID, info);
-        PageSetLSN(page, recptr);
-    }
-
-    END_CRIT_SECTION();
-    UnlockReleaseBuffer(buffer);
-}
-
 /*
  * update_vertex_phys_map
  *
@@ -585,6 +517,132 @@ insert_edge_one_direction(vertex *owner_v,
 
     table_close(list_rel, RowExclusiveLock);
     table_close(pmap_rel, RowExclusiveLock);
+}
+
+PG_FUNCTION_INFO_V1(update_vertex);
+Datum
+update_vertex(PG_FUNCTION_ARGS)
+{
+    int64 id = PG_GETARG_INT64(0);
+    int32 label_id = PG_GETARG_INT32(1);
+    int32 graph_id = PG_GETARG_INT32(2);
+    gtype *new_properties = NP_GET_ARG_GTYPE_P(3); 
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    const label_cache_data *label_cache =
+        search_vertex_label_graph_id_label_id_cache(graph_id, label_id);
+
+    if (!label_cache)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("label not found: graph_id=%d, label_id=%d", graph_id, label_id)));
+
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+
+    /* 1. $O(1)$ Mathematical Address Calculation */
+    /* Calculate tuples per page (or use your existing macro if you have one) */
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+    
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(id, pmap_tuples_per_page, &phys_map_tid);
+
+    /* 2. Read the current phys_map record to get the old vertex TID */
+    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+    
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Vertex ID %ld not found in phys_map (empty line pointer)", id)));
+    }
+
+    /* Copy the routing record to local memory and release the lock immediately */
+    NeoPhysMapRecord *disk_pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    NeoPhysMapRecord current_pmap_rec = *disk_pmap_rec; 
+    UnlockReleaseBuffer(pmap_buf);
+
+    ItemPointerData old_vertex_tid = current_pmap_rec.v_itemptr;
+
+    /* 3. Concurrency Check & Extract old dictionary_id */
+    Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
+    Buffer obuf_check = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_vertex_tid));
+    LockBuffer(obuf_check, BUFFER_LOCK_SHARE);
+    
+    Page opage_check = BufferGetPage(obuf_check);
+    ItemId olp_check = PageGetItemId(opage_check, ItemPointerGetOffsetNumber(&old_vertex_tid));
+
+    if (!ItemIdIsNormal(olp_check)) {
+        UnlockReleaseBuffer(obuf_check);
+        ereport(ERROR, (errmsg("Corrupted phys_map: Pointer to empty line pointer")));
+    }
+
+    NPEntityTupleHeader old_hdr_check = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
+    if (FullTransactionIdIsValid(old_hdr_check->xmax)) {
+        UnlockReleaseBuffer(obuf_check);
+        ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", id)));
+    }
+
+    /* Extract dictionary_id from the old tuple to carry it forward */
+    vertex *old_v = (vertex *) old_hdr_check->serialized_entity;
+    int16 current_dictionary_id = old_v->dictionary_id;
+
+    UnlockReleaseBuffer(obuf_check);
+
+    /* 4. Build the NEW vertex payload cleanly using the internal API */
+    vertex *new_v = build_vertex_internal(id, graph_id, label_id, current_dictionary_id, new_properties);
+
+    Size actual_payload_size = VARSIZE(new_v);
+    Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + actual_payload_size);
+    
+    char *tuple_buf = (char *) palloc0(total_tuple_size);
+    NPEntityTupleHeader new_hdr = (NPEntityTupleHeader) tuple_buf;
+
+    /* Format the new header with the Reverse Version Chain */
+    new_hdr->xmin = current_fxid;
+    new_hdr->xmax = InvalidFullTransactionId;
+    new_hdr->cmin = cid;
+    new_hdr->cmax = InvalidCommandId;
+    new_hdr->flags = 0;
+    new_hdr->id = id;
+    new_hdr->prev_itemptr = old_vertex_tid; 
+    
+    memcpy(new_hdr->serialized_entity, new_v, actual_payload_size);
+    pfree(new_v);
+
+    /* 5. Write the NEW vertex tuple to disk */
+    ItemPointerData new_vertex_tid;
+    np_write_record_to_page(rel, tuple_buf, total_tuple_size, &new_vertex_tid);
+    pfree(tuple_buf);
+
+    /* 6. Update the phys_map router IN-PLACE */
+    current_pmap_rec.v_itemptr = new_vertex_tid;
+    np_overwrite_physmap_in_page(pmap_rel, &phys_map_tid, &current_pmap_rec);
+    table_close(pmap_rel, RowExclusiveLock);
+
+    /* 7. Mark the OLD vertex tuple as deleted (WAL-logged) */
+    Buffer obuf_final = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_vertex_tid));
+    LockBuffer(obuf_final, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, obuf_final, 0);
+    
+    ItemId olp_final = PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&old_vertex_tid));
+    NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, olp_final);
+    
+    wal_old_hdr->xmax = current_fxid;
+    wal_old_hdr->cmax = cid;
+    
+    GenericXLogFinish(state);
+    
+    UnlockReleaseBuffer(obuf_final);
+    table_close(rel, RowExclusiveLock);
+
+    PG_RETURN_VOID();
 }
 
 static void

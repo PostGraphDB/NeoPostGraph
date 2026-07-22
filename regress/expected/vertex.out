@@ -667,6 +667,40 @@ select compact_oldest_linked_list_table('vertex_graph', 2);
  
 (1 row)
 
+select ctid, * from np_vertex_21_2_phys_map;
+ ctid  | v_itemptr | e_tbl_id | e_itemptr 
+-------+-----------+----------+-----------
+ (0,1) | (0,1)     | -        | (0,3)
+ (0,2) | (0,2)     | -        | (0,4)
+(2 rows)
+
+select ctid, * from np_vertex_21_2;
+ ctid  | id |                                  vertex                                  
+-------+----+--------------------------------------------------------------------------
+ (0,1) |  1 | {"id": 1, "label": "person", "properties": {"age": 30, "name": "Alice"}}
+ (0,2) |  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}
+(2 rows)
+
+select update_vertex(1::int8, 2::int4, 21::int4, '{"age": 30, "name": "Alex"}'::gtype);
+ update_vertex 
+---------------
+ 
+(1 row)
+
+select ctid, * from np_vertex_21_2_phys_map;
+ ctid  | v_itemptr | e_tbl_id | e_itemptr 
+-------+-----------+----------+-----------
+ (0,1) | (0,3)     | -        | (0,3)
+ (0,2) | (0,2)     | -        | (0,4)
+(2 rows)
+
+select ctid, * from np_vertex_21_2;
+ ctid  | id |                                 vertex                                  
+-------+----+-------------------------------------------------------------------------
+ (0,2) |  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}
+ (0,3) |  1 | {"id": 1, "label": "person", "properties": {"age": 30, "name": "Alex"}}
+(2 rows)
+
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
 NOTICE:  vlabel "vertex_graph" has been created
  create_vlabel 
@@ -725,6 +759,7 @@ select insert_edge(
  
 (1 row)
 
+  
 select * from np_vertex_21_3_phys_map;
  v_itemptr |           e_tbl_id           | e_itemptr 
 -----------+------------------------------+-----------
@@ -777,8 +812,8 @@ select * From np_vertex_21_3_2_linked_list;
 SELECT * FROM np_vertex_21_3_arraylist;
  id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
 ----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 812, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 812, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  1 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 814, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+  2 | -          | (4294967295,0) | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 813, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 814, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
 (2 rows)
 
 SELECT * FROM public.np_vertex_21_1;

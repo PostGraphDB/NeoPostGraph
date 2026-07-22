@@ -49,6 +49,7 @@ typedef struct NpPhysMapScanDescData
 typedef NpPhysMapScanDescData *NpPhysMapScanDesc;
 
 
+
 static const TupleTableSlotOps *np_physmap_slot_callbacks(Relation rel);
 static void np_physmap_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
                                     int options, BulkInsertState bistate);
@@ -172,71 +173,65 @@ np_physmap_satisfies_snapshot(NeoPhysMapRecord *rec, Snapshot snapshot)
 
     return true;
 }
-/*
+#include "access/generic_xlog.h"
 void
-update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, ItemPointer new_edge_tid, CommandId cid)
-{
-    Size payload_size = sizeof(ItemPointerData) + sizeof(Oid) + sizeof(ItemPointerData);
-    uint32 tuples_per_page = np_calculate_tuples_per_page(payload_size);
-
-    ItemPointerData target_tid;
-    np_id_to_tid(vertex_id, tuples_per_page, &target_tid);
-    
-    BlockNumber target_blk = ItemPointerGetBlockNumber(&target_tid);
-
-
-    if (target_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
-        elog(ERROR, "NeoPostGraph: Cannot update phys_map for vertex %lu because it does not exist on disk.", vertex_id);
-    }
-
-    Buffer buffer = ReadBuffer(pmap_rel, target_blk);
-    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    Page page = BufferGetPage(buffer);
-    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
-
-    if (!ItemIdIsNormal(lp)) {
-        UnlockReleaseBuffer(buffer);
-        elog(ERROR, "NeoPostGraph: phys_map positional update failed, tuple is dead");
-    }
-
-    NeoPhysMapRecord *disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
-    disk_rec->e_tbl_id = RelationGetRelid(pmap_rel);
-    disk_rec->e_itemptr = *new_edge_tid;
-
-    MarkBufferDirty(buffer);
-    UnlockReleaseBuffer(buffer);
-}
-*/
-static void
 np_overwrite_physmap_in_page(Relation rel, ItemPointer tid, NeoPhysMapRecord *new_data)
 {
     Buffer buffer;
     Page page;
     ItemId lp;
     NeoPhysMapRecord *disk_rec;
+    GenericXLogState *state;
 
     buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    page = BufferGetPage(buffer);
+    
+    /* Start the WAL record and register the buffer */
+    state = GenericXLogStart(rel);
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
     
     lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
 
     if (!ItemIdIsNormal(lp)) {
+        GenericXLogAbort(state); /* Cancel the WAL record */
         UnlockReleaseBuffer(buffer);
         elog(ERROR, "NeoPostGraph: attempted to in-place update an invalid phys_map tuple");
     }
 
     disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
 
+    /* Preserve the MVCC visibility fields already on disk */
     new_data->xmin = disk_rec->xmin;
     new_data->cmin = disk_rec->cmin;
     new_data->xmax = disk_rec->xmax;
     new_data->cmax = disk_rec->cmax;
 
+    /* Overwrite the data directly into the WAL-registered page buffer */
     memcpy(disk_rec, new_data, sizeof(NeoPhysMapRecord));
 
-    MarkBufferDirty(buffer);
+    /* Commit the WAL record (this automatically marks the buffer dirty) */
+    GenericXLogFinish(state);
+    
     UnlockReleaseBuffer(buffer);
+}
+
+/*
+ * get_phys_map_vpointer
+ * Safely reads the current vertex property TID from the phys_map block.
+ */
+ItemPointerData
+get_phys_map_vpointer(Relation pmap_rel, ItemPointer pmap_tid)
+{
+    Buffer buffer = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(pmap_tid));
+    LockBuffer(buffer, BUFFER_LOCK_SHARE);
+    Page page = BufferGetPage(buffer);
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(pmap_tid));
+    
+    NeoPhysMapRecord *rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+    ItemPointerData v_tid = rec->v_itemptr;
+    
+    UnlockReleaseBuffer(buffer);
+    return v_tid;
 }
 
 static void 

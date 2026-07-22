@@ -76,21 +76,32 @@ Datum vertex_in(PG_FUNCTION_ARGS) {
 
     NP_RETURN_VERTEX(v);
 }
+vertex *
+build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary_id, gtype *gt)
+{
+    vertex *v = (vertex *) palloc(sizeof(vertex) + VARSIZE(gt));
 
-PG_FUNCTION_INFO_V1(vertex_build);
-Datum vertex_build(PG_FUNCTION_ARGS) {
-    gtype *gt = NP_GET_ARG_GTYPE_P(4);
-
-    vertex *v = palloc(sizeof(vertex) + VARSIZE(gt));
-
-    v->id = PG_GETARG_INT64(0);
-    v->graph_id = PG_GETARG_INT32(1);
-    v->label_id = PG_GETARG_INT32(2);
-    v->dictionary_id = PG_GETARG_INT16(3);
+    v->id = id;
+    v->graph_id = graph_id;
+    v->label_id = label_id;
+    v->dictionary_id = dictionary_id;
 
     memcpy(&v->props, &gt->root, VARSIZE(gt));
 
     SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+
+    return v;
+}
+
+PG_FUNCTION_INFO_V1(vertex_build);
+Datum vertex_build(PG_FUNCTION_ARGS) {
+    int64 id = PG_GETARG_INT64(0);
+    int32 graph_id = PG_GETARG_INT32(1);
+    int32 label_id = PG_GETARG_INT32(2);
+    int16 dictionary_id = PG_GETARG_INT16(3);
+    gtype *gt = NP_GET_ARG_GTYPE_P(4);
+
+    vertex *v = build_vertex_internal(id, graph_id, label_id, dictionary_id, gt);
 
     NP_RETURN_VERTEX(v);
 }

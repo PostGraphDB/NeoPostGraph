@@ -219,6 +219,15 @@ select compact_oldest_linked_list_table('vertex_graph', 2);
 select compact_oldest_linked_list_table('vertex_graph', 2);
 select compact_oldest_linked_list_table('vertex_graph', 2);
 
+select ctid, * from np_vertex_21_2_phys_map;
+select ctid, * from np_vertex_21_2;
+
+select update_vertex(1::int8, 2::int4, 21::int4, '{"age": 30, "name": "Alex"}'::gtype);
+
+select ctid, * from np_vertex_21_2_phys_map;
+select ctid, * from np_vertex_21_2;
+
+
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
 SELECT insert_vertex(
   vertex_build(1, 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
@@ -248,6 +257,7 @@ select insert_edge(
       vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
   );
+  
 select * from np_vertex_21_3_phys_map;
 select * From np_vertex_21_3_1_linked_list;
 select rotate_active_linked_list_table('vertex_graph', 3);

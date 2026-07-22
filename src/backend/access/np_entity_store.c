@@ -147,19 +147,22 @@ np_entity_store_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, T
             {
                 NPEntityTupleHeader hdr = (NPEntityTupleHeader) PageGetItem(page, lp);
 
-                ExecClearTuple(slot);
+                if (!FullTransactionIdIsValid(hdr->xmax)) 
+                {
+                    ExecClearTuple(slot);
 
-                slot->tts_values[0] = Int64GetDatum(hdr->id);
-                slot->tts_isnull[0] = false;
+                    slot->tts_values[0] = Int64GetDatum(hdr->id);
+                    slot->tts_isnull[0] = false;
 
-                slot->tts_values[1] = PointerGetDatum(hdr->serialized_entity);
-                slot->tts_isnull[1] = false;
+                    slot->tts_values[1] = PointerGetDatum(hdr->serialized_entity);
+                    slot->tts_isnull[1] = false;
 
-                ExecStoreVirtualTuple(slot);
-                ItemPointerSet(&slot->tts_tid, scan->rs_cblock, current_offset);
+                    ExecStoreVirtualTuple(slot);
+                    ItemPointerSet(&slot->tts_tid, scan->rs_cblock, current_offset);
 
-                LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
-                return true;
+                    LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
+                    return true;
+                }
             }
         }
 
@@ -192,9 +195,129 @@ static void np_entity_store_multi_insert(Relation rel, TupleTableSlot **slots, i
 static TM_Result np_entity_store_tuple_delete(Relation rel, ItemPointer tid, CommandId cid, Snapshot snapshot, Snapshot crosscheck, bool wait, TM_FailureData *tmfd, bool changingPart) {
     ereport(ERROR, (errmsg("np_entity_store: tuple_delete not implemented"))); return TM_Invisible;
 }
-static TM_Result np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot, CommandId cid, Snapshot snapshot, Snapshot crosscheck, bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode, TU_UpdateIndexes *update_indexes) {
-    ereport(ERROR, (errmsg("np_entity_store: tuple_update not implemented"))); return TM_Invisible;
+
+#include "access/generic_xlog.h" /* Required for WAL logging the old page */
+
+static void 
+np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
+{
+    BlockNumber blockNum = RelationGetNumberOfBlocks(rel);
+
+    Buffer buffer;
+    if (blockNum == 0) {
+        buffer = ReadBuffer(rel, P_NEW);
+    } else {
+        buffer = ReadBuffer(rel, blockNum - 1);
+    }
+
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    Page page = BufferGetPage(buffer);
+
+    Size space_needed = MAXALIGN(data_size) + sizeof(ItemIdData);
+    if (!PageIsNew(page) && PageGetFreeSpace(page) < space_needed) {
+        UnlockReleaseBuffer(buffer);
+        
+        buffer = ReadBuffer(rel, P_NEW);
+        LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+        page = BufferGetPage(buffer);
+    }
+
+    GenericXLogState *state = GenericXLogStart(rel);
+
+    int flags = 0;
+    if (PageIsNew(page)) {
+        flags = GENERIC_XLOG_FULL_IMAGE;
+    }
+    
+    page = GenericXLogRegisterBuffer(state, buffer, flags);
+
+    if (PageIsNew(page)) {
+        PageInit(page, BufferGetPageSize(buffer), 0);
+    }
+
+    OffsetNumber offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+
+    if (offnum == InvalidOffsetNumber) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: Failed to add tuple to page despite free space check");
+    }
+
+    GenericXLogFinish(state);
+
+    ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
+    UnlockReleaseBuffer(buffer);
 }
+
+static TM_Result
+np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot, 
+                             CommandId cid, Snapshot snapshot, Snapshot crosscheck, 
+                             bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode, 
+                             TU_UpdateIndexes *update_indexes)
+{
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    Buffer obuf = ReadBuffer(rel, ItemPointerGetBlockNumber(otid));
+    LockBuffer(obuf, BUFFER_LOCK_EXCLUSIVE);
+    Page opage = BufferGetPage(obuf);
+    OffsetNumber ooff = ItemPointerGetOffsetNumber(otid);
+    ItemId olp = PageGetItemId(opage, ooff);
+    
+    if (!ItemIdIsNormal(olp)) {
+        UnlockReleaseBuffer(obuf);
+        return TM_Invisible;
+    }
+
+    NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage, olp);
+
+    if (FullTransactionIdIsValid(old_hdr->xmax)) {
+        UnlockReleaseBuffer(obuf);
+        return TM_Updated; 
+    }
+
+    bool isnull;
+    uint64 new_id = DatumGetInt64(slot_getattr(slot, 1, &isnull));
+    struct varlena *new_vertex = (struct varlena *) DatumGetPointer(slot_getattr(slot, 2, &isnull));
+
+    Size payload_size = VARSIZE(new_vertex);
+    Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
+
+    char *tuple_buf = (char *) palloc0(total_tuple_size);
+    NPEntityTupleHeader new_hdr = (NPEntityTupleHeader) tuple_buf;
+
+    new_hdr->xmin = current_fxid;
+    new_hdr->xmax = InvalidFullTransactionId;
+    new_hdr->cmin = cid;
+    new_hdr->cmax = InvalidCommandId;
+    
+    new_hdr->prev_itemptr = *otid; 
+    
+    new_hdr->flags = 0;
+    new_hdr->id = new_id;
+    memcpy(new_hdr->serialized_entity, new_vertex, payload_size);
+
+    /* 5. Mark the OLD tuple as deleted (using WAL to be crash-safe) */
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, obuf, 0);
+    
+    NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, olp);
+    wal_old_hdr->xmax = current_fxid;
+    wal_old_hdr->cmax = cid;
+    
+    GenericXLogFinish(state);
+
+    ItemPointerData new_tid;
+    np_write_record_to_page(rel, tuple_buf, total_tuple_size, &new_tid);
+
+    pfree(tuple_buf);
+    UnlockReleaseBuffer(obuf);
+
+    slot->tts_tid = new_tid;
+    *update_indexes = TU_All;
+
+    return TM_Ok;
+}
+
 static TM_Result np_entity_store_tuple_lock(Relation rel, ItemPointer tid, Snapshot snapshot, TupleTableSlot *slot, CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy, uint8 flags, TM_FailureData *tmfd) {
     ereport(ERROR, (errmsg("np_entity_store: tuple_lock not implemented"))); return TM_Invisible;
 }

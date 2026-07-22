@@ -177,6 +177,11 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION update_vertex(id int8, labelid int4, graphid int4, new_properties gtype)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 -- Vertex Metadata Queries
 --

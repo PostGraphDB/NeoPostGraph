@@ -41,6 +41,8 @@ extern bool show_dictionary_nulls;
 void assign_show_dictionary_keys(bool newval, void *extra);
 void assign_show_dictionary_nulls(bool newval, void *extra);
 
+vertex *
+build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary_id, gtype *gt);
 
 
 #define VERTEXOID \
