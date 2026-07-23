@@ -126,7 +126,7 @@ select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      0::int8, 21, 1, 0::smallint, 
+      1::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -141,7 +141,7 @@ select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      1::int8, 21, 1, 0::smallint, 
+      2::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -175,7 +175,7 @@ select insert_edge(
   vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      2::int8, 21, 1, 0::smallint, 
+      3::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -188,7 +188,7 @@ select insert_edge(
   vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      3::int8, 21, 1, 0::smallint, 
+      4::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -242,7 +242,7 @@ select insert_edge(
   vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      3::int8, 21, 1, 0::smallint, 
+      5::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -252,12 +252,12 @@ select insert_edge(
   vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      3::int8, 21, 1, 0::smallint, 
+      6::int8, 21, 1, 0::smallint, 
       vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
   );
-  
+
 select * from np_vertex_21_3_phys_map;
 select * From np_vertex_21_3_1_linked_list;
 select rotate_active_linked_list_table('vertex_graph', 3);
@@ -269,8 +269,9 @@ select * From np_vertex_21_3_1_linked_list;
 select * From np_vertex_21_3_2_linked_list;
 SELECT * FROM np_vertex_21_3_arraylist;
 
-
-
+SELECT * FROM public.np_edge_21_1;
+select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::date}'::gtype);
+SELECT * FROM public.np_edge_21_1;
 SELECT * FROM public.np_vertex_21_1;
 
 

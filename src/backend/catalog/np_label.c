@@ -65,8 +65,8 @@ Oid create_linked_list_table_sequence(char *seq_name, char *namespace);
 Oid create_vertex_label_linked_list_metadata_table(char *tbl_name, Oid namespace);
 int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl);
 Oid create_vertex_label_linked_list_table(char *tbl_name, Oid namespace);
-
-int insert_label(char *table_name, Datum label,Oid label_id, Oid tbl);
+Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace);
+int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map);
 Oid create_edge_tables(int graph_id, int label_id, Oid namespace);
 
 Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
@@ -74,9 +74,12 @@ Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(edge_id_seq)));
 
     Oid edge_tbl = create_edge_tables(graph_id, label_id, namespace);
+    Oid phys_map = create_label_edge_physical_mapping_table(
+                        psprintf("np_edge_%d_%d_phys_map", graph_id, label_id), namespace);
 
-    insert_label(psprintf("np_edge_label_%d", graph_id), DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), label_id, edge_tbl);
-
+    insert_label(psprintf("np_edge_label_%d", graph_id), 
+                 DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), 
+                 label_id, edge_tbl, phys_map);
     //TODO
     //Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     //create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
@@ -225,7 +228,6 @@ Datum create_elabel(PG_FUNCTION_ARGS)
                         errmsg("graph name must not be NULL")));
     char *graph_name = NameStr(*PG_GETARG_NAME(0));
 
-    // fetch the graph cache for the graph_id and vertex_id_seq
     graph_cache_data *entry = search_graph_name_namespace_cache(graph_name, namespace);
     if (!entry)
         ereport(ERROR,
@@ -238,6 +240,11 @@ Datum create_elabel(PG_FUNCTION_ARGS)
 
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->edge_id_seq)));
     Oid edge_tbl = create_edge_tables(entry->id, label_id, namespace);
+    
+    /* NEW: Spawn the router table */
+    Oid phys_map = create_label_edge_physical_mapping_table(
+                        psprintf("np_edge_%d_%d_phys_map", entry->id, label_id), namespace);
+    
     insert_label(
         psprintf("np_edge_label_%d", entry->id),
         DirectFunctionCall2(ltree_addltree,
@@ -245,7 +252,9 @@ Datum create_elabel(PG_FUNCTION_ARGS)
             PG_GETARG_DATUM(1)
         ),
         label_id,
-        edge_tbl);
+        edge_tbl,
+        phys_map /* Pass it to the catalog */
+    );
 
     ereport(NOTICE, (errmsg("elabel \"%s\" has been created", graph_name)));
 
@@ -323,6 +332,43 @@ Oid create_edge_tables(int graph_id, int label_id, Oid namespace) {
     CommandCounterIncrement();
 
     return get_relname_relid(psprintf("np_edge_%d_%d", graph_id, label_id), namespace);
+}
+
+Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+
+    /* The optimized non-MVCC router: just a single physical pointer */
+    create_stmt->tableElts = list_make1(makeColumnDef("e_itemptr", TIDOID, -1, InvalidOid));
+    
+    create_stmt->accessMethod = "np_mutable";
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated CREATE TABLE command)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+                   NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
 }
 
 Oid create_linked_list_table_sequence(char *seq_name, char *namespace)
@@ -406,22 +452,24 @@ int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid
     CommandCounterIncrement();
 }
 
-int insert_label(char *table_name, Datum label,Oid label_id, Oid tbl)
+int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map)
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
 
-    Datum values[3] = {
+    Datum values[4] = {
         ObjectIdGetDatum(label_id),
         label,
-        ObjectIdGetDatum(tbl)
+        ObjectIdGetDatum(tbl),
+        ObjectIdGetDatum(phys_map)
     };
-    bool nulls[3] = { false, false, false };
+    bool nulls[4] = { false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
     table_close(rel, RowExclusiveLock);
-
     CommandCounterIncrement();
+    
+    return 0; /* Just returning 0 since the signature expects int */
 }
 
 typedef struct {
@@ -936,8 +984,10 @@ Oid create_label_metadata_table(char *meta_tbl_name)
     ltree->constraints = list_make1(build_not_null_constraint());
     ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
     ltree->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
+    phys_map->constraints = list_make1(build_not_null_constraint());
 
-    create_stmt->tableElts = list_make3(id, ltree, vertex_tbl);
+    create_stmt->tableElts = list_make4(id, ltree, vertex_tbl, phys_map);
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;

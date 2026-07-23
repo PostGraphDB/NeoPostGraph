@@ -28,14 +28,14 @@
 
 typedef struct __attribute__((packed)) NeoPhysMapRecord
 {
-    FullTransactionId xmin;
-    FullTransactionId xmax;
-    CommandId cmin;
-    CommandId cmax;
     ItemPointerData v_itemptr;
     Oid e_tbl_id;
     ItemPointerData e_itemptr;
 } NeoPhysMapRecord;
+
+typedef struct  __attribute__((packed)) NeoEdgePhysMapRecord {
+    ItemPointerData e_itemptr;
+} NeoEdgePhysMapRecord;
 
 void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
 void np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid);
@@ -43,5 +43,6 @@ uint32 np_calculate_tuples_per_page(Size payload_size);
 void update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_oid, ItemPointer new_edge_tid, CommandId cid);
 ItemPointerData get_phys_map_vpointer(Relation pmap_rel, ItemPointer pmap_tid);
 void np_overwrite_physmap_in_page(Relation rel, ItemPointer tid, NeoPhysMapRecord *new_data);
+void np_set_edge_physmap_record(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data);
 
 #endif // NP_MUTABLE_AM_H

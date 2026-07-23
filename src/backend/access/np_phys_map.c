@@ -139,41 +139,87 @@ FullXidRelativeTo(FullTransactionId rel, TransactionId xid)
 static bool
 np_physmap_satisfies_snapshot(NeoPhysMapRecord *rec, Snapshot snapshot)
 {
-    FullTransactionId f_xmin = rec->xmin;
-    FullTransactionId f_xmax = rec->xmax;
-    TransactionId xmin_32 = XidFromFullTransactionId(f_xmin);
-    TransactionId xmax_32 = XidFromFullTransactionId(f_xmax);
-
-    FullTransactionId next_fxid = ReadNextFullTransactionId();
-    FullTransactionId freeze_horizon = FullXidRelativeTo(next_fxid, snapshot->xmin);
-
-    if (!FullTransactionIdIsValid(f_xmin)) return false;
-    
-    if (FullTransactionIdPrecedes(f_xmin, freeze_horizon)) {
-        // Logically frozen
-    } else if (TransactionIdIsCurrentTransactionId(xmin_32)) {
-        if (rec->cmin >= snapshot->curcid)
-            return false;
-    } else if (XidInMVCCSnapshot(xmin_32, snapshot)) {
-        return false;
-    } else if (!TransactionIdDidCommit(xmin_32)) {
-        return false;
-    }
-
-    if (FullTransactionIdIsValid(f_xmax)) {
-        if (FullTransactionIdPrecedes(f_xmax, freeze_horizon)) {
-            return false;
-        } else if (TransactionIdIsCurrentTransactionId(xmax_32)) {
-            if (rec->cmax >= snapshot->curcid) return true; 
-            else return false;
-        } else if (!XidInMVCCSnapshot(xmax_32, snapshot) && TransactionIdDidCommit(xmax_32)) {
-            return false;
-        }
-    }
 
     return true;
 }
 #include "access/generic_xlog.h"
+#include "storage/lmgr.h"
+#include "storage/bufpage.h"
+#include "access/generic_xlog.h"
+
+void
+np_set_edge_physmap_record(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data)
+{
+    BlockNumber target_block = ItemPointerGetBlockNumber(tid);
+    OffsetNumber target_offset = ItemPointerGetOffsetNumber(tid);
+    BlockNumber nblocks;
+
+    /* 1. Safely Extend the File if the Block Doesn't Exist Yet */
+    LockRelationForExtension(rel, ExclusiveLock);
+    nblocks = RelationGetNumberOfBlocks(rel);
+    while (nblocks <= target_block)
+    {
+        Buffer extend_buf = ReadBuffer(rel, P_NEW);
+        LockBuffer(extend_buf, BUFFER_LOCK_EXCLUSIVE);
+        
+        Page page = BufferGetPage(extend_buf);
+        PageInit(page, BLCKSZ, 0);
+        
+        MarkBufferDirty(extend_buf);
+        UnlockReleaseBuffer(extend_buf);
+        nblocks++;
+    }
+    UnlockRelationForExtension(rel, ExclusiveLock);
+
+    /* 2. Lock the Target Block */
+    Buffer buffer = ReadBuffer(rel, target_block);
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page page = GenericXLogRegisterBuffer(state, buffer, 0);
+    
+    OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+
+    /* 3. Pad Missing Offsets if Inserting Out-of-Order (e.g., ID 5 before ID 1) */
+    if (target_offset > maxoff)
+    {
+        NeoEdgePhysMapRecord empty_pad;
+        memset(&empty_pad, 0, sizeof(NeoEdgePhysMapRecord));
+        ItemPointerSetInvalid(&empty_pad.e_itemptr);
+
+        /* Pad line pointers with full-size empty structs to preserve $O(1) space math */
+        while (maxoff < target_offset - 1)
+        {
+            PageAddItemExtended(page, (Item) &empty_pad, sizeof(NeoEdgePhysMapRecord), 
+                                InvalidOffsetNumber, 0);
+            maxoff++;
+        }
+        
+        /* Add the actual target record at target_offset */
+        PageAddItemExtended(page, (Item) new_data, sizeof(NeoEdgePhysMapRecord), 
+                            InvalidOffsetNumber, 0);
+    }
+    else
+    {
+        /* 4. Overwrite Existing Slot In-Place */
+        ItemId lp = PageGetItemId(page, target_offset);
+        if (ItemIdIsNormal(lp))
+        {
+            NeoEdgePhysMapRecord *disk_rec = (NeoEdgePhysMapRecord *) PageGetItem(page, lp);
+            memcpy(disk_rec, new_data, sizeof(NeoEdgePhysMapRecord));
+        }
+        else
+        {
+            /* Reclaim a dead line pointer */
+            PageAddItemExtended(page, (Item) new_data, sizeof(NeoEdgePhysMapRecord), 
+                                target_offset, PAI_OVERWRITE);
+        }
+    }
+
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(buffer);
+}
+
 void
 np_overwrite_physmap_in_page(Relation rel, ItemPointer tid, NeoPhysMapRecord *new_data)
 {
@@ -200,11 +246,6 @@ np_overwrite_physmap_in_page(Relation rel, ItemPointer tid, NeoPhysMapRecord *ne
 
     disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
 
-    /* Preserve the MVCC visibility fields already on disk */
-    new_data->xmin = disk_rec->xmin;
-    new_data->cmin = disk_rec->cmin;
-    new_data->xmax = disk_rec->xmax;
-    new_data->cmax = disk_rec->cmax;
 
     /* Overwrite the data directly into the WAL-registered page buffer */
     memcpy(disk_rec, new_data, sizeof(NeoPhysMapRecord));
@@ -294,10 +335,6 @@ np_physmap_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Command
 
     // set values in record
     NeoPhysMapRecord rec = {
-        .xmin = GetTopFullTransactionId(), 
-        .cmin = cid,
-        .xmax=InvalidFullTransactionId,
-        .cmax=InvalidCommandId,
         .v_itemptr = *v_ptr,
         .e_tbl_id = DatumGetObjectId(slot->tts_values[1]),
         .e_itemptr = *e_ptr

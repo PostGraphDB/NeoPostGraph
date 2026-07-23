@@ -184,10 +184,6 @@ insert_vertex(PG_FUNCTION_ARGS)
     Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
     
     NeoPhysMapRecord rec = {
-        .xmin = current_fxid,
-        .cmin = cid,
-        .xmax = InvalidFullTransactionId,
-        .cmax = InvalidCommandId,
         .v_itemptr = v_itemptr,
         .e_tbl_id = InvalidOid
     };
@@ -199,6 +195,34 @@ insert_vertex(PG_FUNCTION_ARGS)
     table_close(pmap_rel, RowExclusiveLock);
     
     PG_RETURN_VOID();
+}
+
+static void
+np_overwrite_edge_physmap_in_page(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data)
+{
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page page = GenericXLogRegisterBuffer(state, buffer, 0);
+    
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+
+    /* If the page is completely new, you might need PageAddItem logic here, 
+       but assuming the file is pre-extended or you handle that in np_id_to_tid: */
+    if (!ItemIdIsNormal(lp)) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: attempted to update invalid edge phys_map tuple");
+    }
+
+    NeoEdgePhysMapRecord *disk_rec = (NeoEdgePhysMapRecord *) PageGetItem(page, lp);
+
+    /* Pure overwrite */
+    memcpy(disk_rec, new_data, sizeof(NeoEdgePhysMapRecord));
+
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(buffer);
 }
 
 PG_FUNCTION_INFO_V1(insert_edge);
@@ -215,16 +239,14 @@ insert_edge(PG_FUNCTION_ARGS)
     const label_cache_data *edge_label =
         search_edge_label_graph_id_label_id_cache(e->graph_id, e->label_id);
 
+    /* (Note: I changed vertex_tbl to edge_tbl here just in case that was a typo in your struct access!) */
     if (!edge_label || !OidIsValid(edge_label->vertex_tbl))
         ereport(ERROR, (errmsg("Edge label table not found")));
 
     /* 1. Open the custom entity_store edge table */
     Relation edge_rel = table_open(edge_label->vertex_tbl, RowExclusiveLock);
 
-    /* 
-     * 2. Calculate explicit byte size.
-     * Assuming 'edge' is a standard varlena, VARSIZE() gives us the payload length.
-     */
+    /* 2. Calculate explicit byte size. */
     Size payload_size = VARSIZE(e);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
 
@@ -250,9 +272,153 @@ insert_edge(PG_FUNCTION_ARGS)
     pfree(tuple_buf);
     table_close(edge_rel, RowExclusiveLock);
 
+    if (OidIsValid(edge_label->phys_map)) 
+    {
+        Relation pmap_rel = table_open(edge_label->phys_map, RowExclusiveLock);
+        
+        uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+        ItemPointerData phys_map_tid;
+        np_id_to_tid(e->id, pmap_tuples_per_page, &phys_map_tid);
+
+        NeoEdgePhysMapRecord pmap_rec;
+        pmap_rec.e_itemptr = edge_tid;
+
+        /* Safely Upsert: Extends file, pads array, and sets the pointer */
+        np_set_edge_physmap_record(pmap_rel, &phys_map_tid, &pmap_rec);
+        
+        table_close(pmap_rel, RowExclusiveLock);
+    }
+
     /* 5. Update the doubly-linked adjacency lists on the start and end vertices */
     insert_edge_one_direction(start_v, end_v, e, 0, cid);
     insert_edge_one_direction(end_v, start_v, e, 1, cid);
+
+    PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(update_edge);
+Datum
+update_edge(PG_FUNCTION_ARGS)
+{
+    int64 edge_id = PG_GETARG_INT64(0);
+    int32 label_id = PG_GETARG_INT32(1);
+    int32 graph_id = PG_GETARG_INT32(2);
+    gtype *new_properties = NP_GET_ARG_GTYPE_P(3); 
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    const label_cache_data *label_cache =
+        search_edge_label_graph_id_label_id_cache(graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(label_cache->vertex_tbl))
+        ereport(ERROR, (errmsg("edge label not found: graph_id=%d, label_id=%d", graph_id, label_id)));
+
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(edge_id, pmap_tuples_per_page, &phys_map_tid);
+
+    /* 2. Read the current phys_map record */
+    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+    
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Edge ID %ld not found in phys_map", edge_id)));
+    }
+
+    NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    ItemPointerData old_edge_tid = disk_pmap_rec->e_itemptr;
+    UnlockReleaseBuffer(pmap_buf);
+
+    /* 3. Concurrency Check & Extract old edge data */
+    Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
+    Buffer obuf_check = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_edge_tid));
+    LockBuffer(obuf_check, BUFFER_LOCK_SHARE);
+    
+    Page opage_check = BufferGetPage(obuf_check);
+    ItemId olp_check = PageGetItemId(opage_check, ItemPointerGetOffsetNumber(&old_edge_tid));
+
+    if (!ItemIdIsNormal(olp_check)) {
+        UnlockReleaseBuffer(obuf_check);
+        ereport(ERROR, (errmsg("Corrupted phys_map: Pointer to empty line pointer for edge %ld", edge_id)));
+    }
+
+    NPEntityTupleHeader old_hdr_check = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
+    if (FullTransactionIdIsValid(old_hdr_check->xmax)) {
+        UnlockReleaseBuffer(obuf_check);
+        ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
+    }
+
+    edge *old_e = (edge *) old_hdr_check->serialized_entity;
+    
+    // TODO: Dictionary Compression
+    int16 current_dict_id = old_e->dictionary_id; 
+    
+    int64 start_vid = old_e->start_id;  
+    int64 end_vid = old_e->end_id;     
+
+
+    UnlockReleaseBuffer(obuf_check);
+
+    Size gt_size = VARSIZE(new_properties);
+    Size fixed_size = offsetof(edge, props); 
+    
+    edge *new_e = (edge *) palloc(fixed_size + gt_size);
+    memcpy(new_e, old_e, fixed_size);
+
+    memcpy((char *)new_e + fixed_size, &new_properties->root, gt_size);
+
+    SET_VARSIZE(new_e, fixed_size + gt_size);
+
+    Size actual_payload_size = VARSIZE(new_e);
+    Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + actual_payload_size);
+    
+    char *tuple_buf = (char *) palloc0(total_tuple_size);
+    NPEntityTupleHeader new_hdr = (NPEntityTupleHeader) tuple_buf;
+
+    new_hdr->xmin = current_fxid;
+    new_hdr->xmax = InvalidFullTransactionId;
+    new_hdr->cmin = cid;
+    new_hdr->cmax = InvalidCommandId;
+    new_hdr->flags = 0;
+    new_hdr->id = edge_id;
+    new_hdr->prev_itemptr = old_edge_tid; 
+    
+    memcpy(new_hdr->serialized_entity, new_e, actual_payload_size);
+    pfree(new_e);
+
+    ItemPointerData new_edge_tid;
+    np_write_record_to_page(rel, tuple_buf, total_tuple_size, &new_edge_tid);
+    pfree(tuple_buf);
+
+    NeoEdgePhysMapRecord pmap_rec;
+    pmap_rec.e_itemptr = new_edge_tid;
+    np_set_edge_physmap_record(pmap_rel, &phys_map_tid, &pmap_rec);
+    table_close(pmap_rel, RowExclusiveLock);
+
+    Buffer obuf_final = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_edge_tid));
+    LockBuffer(obuf_final, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, obuf_final, 0);
+    
+    ItemId olp_final = PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&old_edge_tid));
+    NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, olp_final);
+    
+    wal_old_hdr->xmax = current_fxid;
+    wal_old_hdr->cmax = cid;
+    
+    GenericXLogFinish(state);
+    
+    UnlockReleaseBuffer(obuf_final);
+    table_close(rel, RowExclusiveLock);
 
     PG_RETURN_VOID();
 }
@@ -541,14 +707,11 @@ update_vertex(PG_FUNCTION_ARGS)
 
     Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
 
-    /* 1. $O(1)$ Mathematical Address Calculation */
-    /* Calculate tuples per page (or use your existing macro if you have one) */
     uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
     
     ItemPointerData phys_map_tid;
     np_id_to_tid(id, pmap_tuples_per_page, &phys_map_tid);
 
-    /* 2. Read the current phys_map record to get the old vertex TID */
     Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
     LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
     
@@ -561,14 +724,12 @@ update_vertex(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("Vertex ID %ld not found in phys_map (empty line pointer)", id)));
     }
 
-    /* Copy the routing record to local memory and release the lock immediately */
     NeoPhysMapRecord *disk_pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
     NeoPhysMapRecord current_pmap_rec = *disk_pmap_rec; 
     UnlockReleaseBuffer(pmap_buf);
 
     ItemPointerData old_vertex_tid = current_pmap_rec.v_itemptr;
 
-    /* 3. Concurrency Check & Extract old dictionary_id */
     Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
     Buffer obuf_check = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_vertex_tid));
     LockBuffer(obuf_check, BUFFER_LOCK_SHARE);
@@ -587,13 +748,11 @@ update_vertex(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", id)));
     }
 
-    /* Extract dictionary_id from the old tuple to carry it forward */
     vertex *old_v = (vertex *) old_hdr_check->serialized_entity;
     int16 current_dictionary_id = old_v->dictionary_id;
 
     UnlockReleaseBuffer(obuf_check);
 
-    /* 4. Build the NEW vertex payload cleanly using the internal API */
     vertex *new_v = build_vertex_internal(id, graph_id, label_id, current_dictionary_id, new_properties);
 
     Size actual_payload_size = VARSIZE(new_v);
@@ -602,7 +761,6 @@ update_vertex(PG_FUNCTION_ARGS)
     char *tuple_buf = (char *) palloc0(total_tuple_size);
     NPEntityTupleHeader new_hdr = (NPEntityTupleHeader) tuple_buf;
 
-    /* Format the new header with the Reverse Version Chain */
     new_hdr->xmin = current_fxid;
     new_hdr->xmax = InvalidFullTransactionId;
     new_hdr->cmin = cid;
@@ -614,17 +772,14 @@ update_vertex(PG_FUNCTION_ARGS)
     memcpy(new_hdr->serialized_entity, new_v, actual_payload_size);
     pfree(new_v);
 
-    /* 5. Write the NEW vertex tuple to disk */
     ItemPointerData new_vertex_tid;
     np_write_record_to_page(rel, tuple_buf, total_tuple_size, &new_vertex_tid);
     pfree(tuple_buf);
 
-    /* 6. Update the phys_map router IN-PLACE */
     current_pmap_rec.v_itemptr = new_vertex_tid;
     np_overwrite_physmap_in_page(pmap_rel, &phys_map_tid, &current_pmap_rec);
     table_close(pmap_rel, RowExclusiveLock);
 
-    /* 7. Mark the OLD vertex tuple as deleted (WAL-logged) */
     Buffer obuf_final = ReadBuffer(rel, ItemPointerGetBlockNumber(&old_vertex_tid));
     LockBuffer(obuf_final, BUFFER_LOCK_EXCLUSIVE);
     

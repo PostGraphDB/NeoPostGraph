@@ -610,7 +610,7 @@ fill_edge_label_cache_data(label_cache_data *cache_data,
     cache_data->id         = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
     cache_data->label      = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
     cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
-    cache_data->phys_map         = InvalidOid;
+    cache_data->phys_map         = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
     cache_data->linked_list_meta = InvalidOid;
     cache_data->linked_list_seq  = InvalidOid;
     cache_data->arraylist        = InvalidOid;
