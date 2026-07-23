@@ -270,8 +270,17 @@ select * From np_vertex_21_3_2_linked_list;
 SELECT * FROM np_vertex_21_3_arraylist;
 
 SELECT * FROM public.np_edge_21_1;
+
 select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::date}'::gtype);
+
 SELECT * FROM public.np_edge_21_1;
+select * from np_vertex_21_1_1_linked_list;
+
+select delete_edge(2::int8, 1::int4, 21::int4);
+SELECT * FROM public.np_edge_21_1;
+select * from np_vertex_21_1_1_linked_list;
+
+
 SELECT * FROM public.np_vertex_21_1;
 
 

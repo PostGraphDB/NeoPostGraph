@@ -266,6 +266,11 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION delete_edge(id int8, labelid int4, graphid int4)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 --
 --

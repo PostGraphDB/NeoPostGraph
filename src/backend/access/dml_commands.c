@@ -799,6 +799,163 @@ update_vertex(PG_FUNCTION_ARGS)
 
     PG_RETURN_VOID();
 }
+static void
+np_delete_edge_from_adj_list(int32 graph_id, int64 vertex_id, int32 vertex_label_id, int64 target_edge_id, CommandId cid, FullTransactionId current_fxid)
+{
+    const label_cache_data *v_label = search_vertex_label_graph_id_label_id_cache(graph_id, vertex_label_id);
+    
+    if (!v_label || !OidIsValid(v_label->phys_map)) 
+        return;
+
+    Relation pmap_rel = table_open(v_label->phys_map, AccessShareLock);
+    
+    Oid current_tbl = InvalidOid;
+    ItemPointerData current_tid = get_current_head_tid(pmap_rel, vertex_id, &current_tbl);
+    
+    table_close(pmap_rel, AccessShareLock);
+
+    /* Walk the doubly-linked list until we find the target edge */
+    while (ItemPointerIsValid(&current_tid) && OidIsValid(current_tbl))
+    {
+        Relation list_rel = table_open(current_tbl, RowExclusiveLock);
+        Buffer buf = ReadBuffer(list_rel, ItemPointerGetBlockNumber(&current_tid));
+        LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+        
+        Page page = BufferGetPage(buf);
+        ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&current_tid));
+        
+        if (!ItemIdIsNormal(lp)) {
+            UnlockReleaseBuffer(buf);
+            table_close(list_rel, RowExclusiveLock);
+            elog(ERROR, "NeoPostGraph: Traversed into an invalid line pointer in linked list");
+        }
+        
+        NeoLinkedListRecord *rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+        
+        /* If we found the edge and it isn't already deleted */
+        if (rec->id == target_edge_id && !FullTransactionIdIsValid(rec->xmax)) 
+        {
+            GenericXLogState *state = GenericXLogStart(list_rel);
+            page = GenericXLogRegisterBuffer(state, buf, 0);
+            
+            lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&current_tid));
+            NeoLinkedListRecord *wal_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+            
+            /* Stamp the MVCC tombstone directly on the adjacency record */
+            wal_rec->xmax = current_fxid;
+            wal_rec->cmax = cid;
+            
+            GenericXLogFinish(state);
+            UnlockReleaseBuffer(buf);
+            table_close(list_rel, RowExclusiveLock);
+            return; /* Successfully unlinked */
+        }
+        
+        /* Not a match, extract the next pointers before dropping the lock */
+        Oid next_tbl = rec->next_tbl;
+        ItemPointerData next_tid = rec->next_itemptr;
+        
+        UnlockReleaseBuffer(buf);
+        table_close(list_rel, RowExclusiveLock);
+        
+        current_tbl = next_tbl;
+        current_tid = next_tid;
+    }
+}
+
+PG_FUNCTION_INFO_V1(delete_edge);
+Datum
+delete_edge(PG_FUNCTION_ARGS)
+{
+    int64 edge_id = PG_GETARG_INT64(0);
+    int32 label_id = PG_GETARG_INT32(1);
+    int32 graph_id = PG_GETARG_INT32(2);
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    const label_cache_data *label_cache =
+        search_edge_label_graph_id_label_id_cache(graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(label_cache->vertex_tbl))
+        ereport(ERROR, (errmsg("edge label not found: graph_id=%d, label_id=%d", graph_id, label_id)));
+
+    /* 1. O(1) Address Calculation for Edge PhysMap */
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(edge_id, pmap_tuples_per_page, &phys_map_tid);
+
+    /* 2. Read the current phys_map record to get target TID */
+    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Edge ID %ld not found in phys_map", edge_id)));
+    }
+
+    NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    ItemPointerData target_edge_tid = disk_pmap_rec->e_itemptr;
+    
+    UnlockReleaseBuffer(pmap_buf);
+    table_close(pmap_rel, RowExclusiveLock);
+
+    /* 3. Tombstone the Edge Tuple in the Heap */
+    Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
+    Buffer obuf = ReadBuffer(rel, ItemPointerGetBlockNumber(&target_edge_tid));
+    LockBuffer(obuf, BUFFER_LOCK_EXCLUSIVE);
+
+    /* 4. WAL Logging and MVCC Tombstoning */
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, obuf, 0);
+
+    ItemId wal_lp = PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&target_edge_tid));
+    
+    if (!ItemIdIsNormal(wal_lp)) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(obuf);
+        table_close(rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Corrupted phys_map: Pointer to empty line pointer for edge %ld", edge_id)));
+    }
+
+    NPEntityTupleHeader wal_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, wal_lp);
+
+    /* Concurrency Check */
+    if (FullTransactionIdIsValid(wal_hdr->xmax)) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(obuf);
+        table_close(rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
+    }
+
+    /* Extract vertex routing metadata before we lose access to the payload */
+    edge *deleted_e = (edge *) wal_hdr->serialized_entity;
+    int64 start_vid = deleted_e->start_id;  
+    int32 start_label = deleted_e->start_label;
+    int64 end_vid = deleted_e->end_id;
+    int32 end_label = deleted_e->end_label;
+
+    wal_hdr->xmax = current_fxid;
+    wal_hdr->cmax = cid;
+
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(obuf);
+    table_close(rel, RowExclusiveLock);
+
+    /* 
+     * 5. Adjacency List Unlinking
+     * Use the vertex phys_maps to find and tombstone the edge pointers.
+     */
+    np_delete_edge_from_adj_list(graph_id, start_vid, start_label, edge_id, cid, current_fxid);
+    np_delete_edge_from_adj_list(graph_id, end_vid, end_label, edge_id, cid, current_fxid);
+
+    PG_RETURN_VOID();
+}
 
 static void
 update_edge_prev_pointer(Relation rel, ItemPointer old_head_tid, Oid prev_table_oid, ItemPointer new_head_tid, CommandId cid)

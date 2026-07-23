@@ -415,17 +415,19 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
         table_close(array_rel, RowExclusiveLock);
 
         /* 3. Update upstream links to point at the new block */
-        if (OidIsValid(entry->upstream_tbl)) {
+if (OidIsValid(entry->upstream_tbl)) {
             Relation upstream_rel = table_open(entry->upstream_tbl, RowExclusiveLock);
             np_update_next_pointer_inplace(upstream_rel, &entry->upstream_tid, 
                                            arraylist_oid, &new_array_tid, cid);
             table_close(upstream_rel, RowExclusiveLock);
         } else {
             Relation pmap_rel = table_open(pmap_oid, RowExclusiveLock);
-            update_vertex_phys_map(pmap_rel, entry->owner_id, InvalidOid, &new_array_tid, cid);
+            
+            /* FIX: Pass arraylist_oid instead of InvalidOid */
+            update_vertex_phys_map(pmap_rel, entry->owner_id, arraylist_oid, &new_array_tid, cid);
+            
             table_close(pmap_rel, RowExclusiveLock);
         }
-
         /* Because we used double indirection in the merge, this pfree is 100% safe */
         pfree(entry->adj);
     }

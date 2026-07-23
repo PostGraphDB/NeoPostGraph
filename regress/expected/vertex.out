@@ -668,10 +668,10 @@ select compact_oldest_linked_list_table('vertex_graph', 2);
 (1 row)
 
 select ctid, * from np_vertex_21_2_phys_map;
- ctid  | v_itemptr | e_tbl_id | e_itemptr 
--------+-----------+----------+-----------
- (0,1) | (0,1)     | -        | (0,3)
- (0,2) | (0,2)     | -        | (0,4)
+ ctid  | v_itemptr |         e_tbl_id         | e_itemptr 
+-------+-----------+--------------------------+-----------
+ (0,1) | (0,1)     | np_vertex_21_2_arraylist | (0,3)
+ (0,2) | (0,2)     | np_vertex_21_2_arraylist | (0,4)
 (2 rows)
 
 select ctid, * from np_vertex_21_2;
@@ -688,10 +688,10 @@ select update_vertex(1::int8, 2::int4, 21::int4, '{"age": 30, "name": "Alex"}'::
 (1 row)
 
 select ctid, * from np_vertex_21_2_phys_map;
- ctid  | v_itemptr | e_tbl_id | e_itemptr 
--------+-----------+----------+-----------
- (0,1) | (0,3)     | -        | (0,3)
- (0,2) | (0,2)     | -        | (0,4)
+ ctid  | v_itemptr |         e_tbl_id         | e_itemptr 
+-------+-----------+--------------------------+-----------
+ (0,1) | (0,3)     | np_vertex_21_2_arraylist | (0,3)
+ (0,2) | (0,2)     | np_vertex_21_2_arraylist | (0,4)
 (2 rows)
 
 select ctid, * from np_vertex_21_2;
@@ -842,6 +842,38 @@ SELECT * FROM public.np_edge_21_1;
   6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
   1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {"known_since": 12-31-1971}}
 (6 rows)
+
+select * from np_vertex_21_1_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl           |  next_itemptr  |           prev_tbl           |  prev_itemptr  
+----+----------+------+----------+----------+-----------+------------------------------+----------------+------------------------------+----------------
+  1 |        1 |      |        1 |        2 |         1 | -                            | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,3)
+  1 |        1 | \x01 |        2 |        1 |         1 | -                            | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,4)
+  2 |        1 |      |        1 |        2 |         1 | np_vertex_21_1_1_linked_list | (0,1)          | -                            | (4294967295,0)
+  2 |        1 | \x01 |        2 |        1 |         1 | np_vertex_21_1_1_linked_list | (0,2)          | -                            | (4294967295,0)
+(4 rows)
+
+select delete_edge(2::int8, 1::int4, 21::int4);
+ delete_edge 
+-------------
+ 
+(1 row)
+
+SELECT * FROM public.np_edge_21_1;
+ id |                                                      edge                                                      
+----+----------------------------------------------------------------------------------------------------------------
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {"known_since": 12-31-1971}}
+(5 rows)
+
+select * from np_vertex_21_1_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid | next_tbl |  next_itemptr  |           prev_tbl           | prev_itemptr 
+----+----------+------+----------+----------+-----------+----------+----------------+------------------------------+--------------
+  1 |        1 |      |        1 |        2 |         1 | -        | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,3)
+  1 |        1 | \x01 |        2 |        1 |         1 | -        | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
 
 SELECT * FROM public.np_vertex_21_1;
  id |                               vertex                               
