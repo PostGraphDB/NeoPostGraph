@@ -132,6 +132,9 @@ select insert_edge(
       '{}'::gtype)
   );
 
+
+RESET neopostgraph.show_dictionary_keys;
+
 \d+ np_edge_21_1
 
 SELECT * FROM public.np_edge_21_1;
@@ -283,6 +286,18 @@ select * from np_vertex_21_1_1_linked_list;
 
 SELECT * FROM public.np_vertex_21_1;
 
+select delete_vertex(1::int8, 1::int4, 21::int4, false);
 
+SELECT * FROM public.np_vertex_21_1;
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_1_1_linked_list;
+select * From np_vertex_21_1_2_linked_list;
+SELECT * FROM np_vertex_21_1_arraylist;
 
-RESET neopostgraph.show_dictionary_keys;
+select delete_vertex(1::int8, 1::int4, 21::int4, true);
+
+SELECT * FROM public.np_vertex_21_1;
+select * from np_vertex_21_1_phys_map;
+select * From np_vertex_21_1_1_linked_list;
+select * From np_vertex_21_1_2_linked_list;
+SELECT * FROM np_vertex_21_1_arraylist;

@@ -377,6 +377,7 @@ select insert_edge(
  
 (1 row)
 
+RESET neopostgraph.show_dictionary_keys;
 \d+ np_edge_21_1
                                Table "public.np_edge_21_1"
  Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
@@ -882,4 +883,68 @@ SELECT * FROM public.np_vertex_21_1;
   2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
 (2 rows)
 
-RESET neopostgraph.show_dictionary_keys;
+select delete_vertex(1::int8, 1::int4, 21::int4, false);
+ERROR:  Cannot delete vertex 1 because it still has active edges. Use DETACH DELETE.
+SELECT * FROM public.np_vertex_21_1;
+ id |                               vertex                               
+----+--------------------------------------------------------------------
+  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}}
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+(2 rows)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_1_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid | next_tbl |  next_itemptr  |           prev_tbl           | prev_itemptr 
+----+----------+------+----------+----------+-----------+----------+----------------+------------------------------+--------------
+  1 |        1 |      |        1 |        2 |         1 | -        | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,3)
+  1 |        1 | \x01 |        2 |        1 |         1 | -        | (4294967295,0) | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_1_2_linked_list;
+ERROR:  relation "np_vertex_21_1_2_linked_list" does not exist
+LINE 1: select * From np_vertex_21_1_2_linked_list;
+                      ^
+SELECT * FROM np_vertex_21_1_arraylist;
+ id | prev_table | prev_itemptr | adj_list | next_itemptr 
+----+------------+--------------+----------+--------------
+(0 rows)
+
+select delete_vertex(1::int8, 1::int4, 21::int4, true);
+ delete_vertex 
+---------------
+ 
+(1 row)
+
+SELECT * FROM public.np_vertex_21_1;
+ id |                              vertex                              
+----+------------------------------------------------------------------
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+(1 row)
+
+select * from np_vertex_21_1_phys_map;
+ v_itemptr |           e_tbl_id           | e_itemptr 
+-----------+------------------------------+-----------
+ (0,1)     | np_vertex_21_1_1_linked_list | (0,3)
+ (0,2)     | np_vertex_21_1_1_linked_list | (0,4)
+(2 rows)
+
+select * From np_vertex_21_1_1_linked_list;
+ id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
+----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
+(0 rows)
+
+select * From np_vertex_21_1_2_linked_list;
+ERROR:  relation "np_vertex_21_1_2_linked_list" does not exist
+LINE 1: select * From np_vertex_21_1_2_linked_list;
+                      ^
+SELECT * FROM np_vertex_21_1_arraylist;
+ id | prev_table | prev_itemptr | adj_list | next_itemptr 
+----+------------+--------------+----------+--------------
+(0 rows)
+

@@ -182,6 +182,11 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION delete_vertex(id int8, labelid int4, graphid int4, detach boolean Default false)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 -- Vertex Metadata Queries
 --
