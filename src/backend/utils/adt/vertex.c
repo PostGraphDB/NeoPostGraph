@@ -29,12 +29,16 @@
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "varatt.h"
+#include "utils/array.h"
+#include "catalog/pg_type.h"
 
 #include "utils/np_cache.h"
 #include "utils/gtype.h"
 #include "utils/dictionary.h"
 #include "utils/vertex.h"
 #include "catalog/np_label.h"
+#include "access/np_phys_map.h"
+#include "access/np_entity_store.h"
 
 bool show_dictionary_keys = true;
 bool show_dictionary_nulls = false;
@@ -115,13 +119,98 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
     appendStringInfoString(buffer, "{\"id\": ");
     appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(v->id))));
 
-    // label
-    appendStringInfoString(buffer, ", \"label\": \"");
-    if (v->graph_id != 0 && v->label_id != 0) {
-        label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
-        appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(cache->label)) + 2));
-    }
+// label 
+    appendStringInfoString(buffer, ", \"label\": \""); 
+    if (v->graph_id != 0 && v->label_id != 0) { 
+        const label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id); 
+        
+        char *struct_label = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(cache->label)));
+        bool has_labels = false;
+        char *label_start = NULL;
+        
+        /* 1. Strip the internal root '_' */
+        if (strncmp(struct_label, "_.", 2) == 0) {
+            label_start = struct_label + 2;
+        } else if (strcmp(struct_label, "_") != 0) {
+            label_start = struct_label;
+        }
 
+        /* 2. Convert Ltree Dots to Colons and Append */
+        if (label_start != NULL) {
+            for (char *c = label_start; *c != '\0'; c++) {
+                if (*c == '.') {
+                    *c = ':';
+                }
+            }
+            appendStringInfoString(buffer, label_start);
+            has_labels = true;
+        }
+
+        /* 3. Fetch and append Annotation Labels directly to the string */
+        if (OidIsValid(cache->annotations_tbl) && cache->annotation_map != NULL) {
+            
+            uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+            ItemPointerData phys_map_tid;
+            np_id_to_tid(v->id, pmap_tuples_per_page, &phys_map_tid);
+
+            Relation pmap_rel = table_open(cache->phys_map, AccessShareLock);
+            Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+            LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+            
+            Page pmap_page = BufferGetPage(pmap_buf);
+            ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+            
+            ItemPointerData a_itemptr;
+            ItemPointerSetInvalid(&a_itemptr);
+
+            if (ItemIdIsNormal(pmap_lp)) {
+                NeoPhysMapRecord *disk_pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+                a_itemptr = disk_pmap_rec->a_itemptr;
+            }
+            
+            UnlockReleaseBuffer(pmap_buf);
+            table_close(pmap_rel, AccessShareLock);
+
+            if (ItemPointerIsValid(&a_itemptr) && ItemPointerGetOffsetNumber(&a_itemptr) != 0) {
+                Relation annot_rel = table_open(cache->annotations_tbl, AccessShareLock);
+                Buffer annot_buf = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&a_itemptr));
+                LockBuffer(annot_buf, BUFFER_LOCK_SHARE);
+                
+                Page annot_page = BufferGetPage(annot_buf);
+                ItemId annot_lp = PageGetItemId(annot_page, ItemPointerGetOffsetNumber(&a_itemptr));
+                
+                if (ItemIdIsNormal(annot_lp)) {
+                    NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) PageGetItem(annot_page, annot_lp);
+                    
+                    if (!FullTransactionIdIsValid(annot_hdr->xmax)) {
+                        bytea *bitset = (bytea *) annot_hdr->serialized_entity;
+                        char *bits = VARDATA(bitset);
+
+                        Datum *map_d;
+                        bool *map_n;
+                        int map_count;
+                        deconstruct_array(cache->annotation_map, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+                        
+                        for (int i = 0; i < map_count; i++) {
+                            if (map_n[i]) continue;
+                            
+                            /* Check if the bit at index i is flipped */
+                            if ((bits[i / 8] & (1 << (i % 8))) != 0) {
+                                if (has_labels) {
+                                    appendStringInfoString(buffer, ":");  /* <-- CHANGED TO COLON */
+                                }
+                                appendStringInfoString(buffer, TextDatumGetCString(map_d[i]));
+                                has_labels = true;
+                            }
+                        }
+                    }
+                }
+                UnlockReleaseBuffer(annot_buf);
+                table_close(annot_rel, AccessShareLock);
+            }
+        }
+    }
+    
     // properties
     appendStringInfoString(buffer, "\", \"properties\": ");
 

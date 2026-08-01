@@ -45,6 +45,7 @@ typedef struct NpPhysMapScanDescData
     BlockNumber       rs_nblocks;   
     ItemPointerData   curr_v_ip;
     ItemPointerData   curr_e_ip;
+    ItemPointerData   curr_a_ip;
 } NpPhysMapScanDescData;
 typedef NpPhysMapScanDescData *NpPhysMapScanDesc;
 
@@ -332,12 +333,14 @@ np_physmap_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Command
     // convert item pointers
     ItemPointer v_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[0]);
     ItemPointer e_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[2]);
+    ItemPointer a_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[3]);
 
     // set values in record
     NeoPhysMapRecord rec = {
         .v_itemptr = *v_ptr,
         .e_tbl_id = DatumGetObjectId(slot->tts_values[1]),
-        .e_itemptr = *e_ptr
+        .e_itemptr = *e_ptr,
+        .a_itemptr = *a_ptr
     };
 
     // write
@@ -361,12 +364,14 @@ np_physmap_tableam_tuple_update(Relation relation, ItemPointer otid, TupleTableS
     // convert item pointers
     ItemPointer v_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[0]);
     ItemPointer e_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[2]);
+    ItemPointer a_ptr = (ItemPointer) DatumGetPointer(slot->tts_values[3]);
 
     // set values in record (MVCC headers are preserved by the writer)
     NeoPhysMapRecord rec = {
         .v_itemptr = *v_ptr,
         .e_tbl_id = DatumGetObjectId(slot->tts_values[1]),
-        .e_itemptr = *e_ptr
+        .e_itemptr = *e_ptr,
+        .a_itemptr = *a_ptr
     };
 
     // write in-place
@@ -474,13 +479,20 @@ np_physmap_scan_getnextslot(TableScanDesc sscan, ScanDirection direction,
 
                 if (np_physmap_satisfies_snapshot(rec, snapshot)) {
                     ExecClearTuple(slot);
-                    memset(slot->tts_isnull, false, 3 * sizeof(bool));
+                    
+                    /* BUMP THIS TO 4 */
+                    memset(slot->tts_isnull, false, 4 * sizeof(bool));
 
                     npscan->curr_v_ip = rec->v_itemptr;
                     slot->tts_values[0] = PointerGetDatum(&npscan->curr_v_ip);
+                    
                     slot->tts_values[1] = ObjectIdGetDatum(rec->e_tbl_id);
+                    
                     npscan->curr_e_ip = rec->e_itemptr;
                     slot->tts_values[2] = PointerGetDatum(&npscan->curr_e_ip);
+
+                    npscan->curr_a_ip = rec->a_itemptr;
+                    slot->tts_values[3] = PointerGetDatum(&npscan->curr_a_ip);
 
                     ExecStoreVirtualTuple(slot);
                     ItemPointerSet(&slot->tts_tid, npscan->curr_block, npscan->curr_offset);
@@ -501,7 +513,6 @@ np_physmap_scan_getnextslot(TableScanDesc sscan, ScanDirection direction,
 
     return false;
 }
-
 static void
 np_physmap_scan_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
                        bool allow_strat, bool allow_sync, bool allow_pagemode)

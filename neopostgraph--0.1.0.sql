@@ -16,7 +16,9 @@
  -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION NeoPostGraph" to load this file. \quit
 
-                                                             --
+CREATE EXTENSION IF NOT EXISTS ltree;
+
+--
 -- Type Initial Definitions
 --
 -- XXX: Create the shell type here so functions can reference it, then fill in the actual definition
@@ -156,9 +158,14 @@ CREATE TYPE vertex (
 --
 -- DDL Commands
 --
-CREATE FUNCTION create_vlabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
+CREATE FUNCTION create_vlabel(graph_name Name, label text, annotation_labels text[] DEFAULT NULL, namespace text DEFAULT NULL)
 RETURNS void 
 LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION merge_vlabels(graph_name Name, parent_label_id int4, child_label_id int4, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c
 AS 'MODULE_PATHNAME';
 
 --
@@ -172,7 +179,7 @@ RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
-CREATE FUNCTION insert_vertex(vertex)
+CREATE FUNCTION insert_vertex(vertex, annotations text[] Default NULL)
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';

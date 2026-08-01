@@ -62,3 +62,15 @@ Constraint *build_not_null_constraint(void)
 
     return not_null;
 }
+
+Constraint *build_unique_constraint(void)
+{
+    Constraint *not_null;
+
+    not_null = makeNode(Constraint);
+    not_null->contype = CONSTR_UNIQUE;
+    not_null->location = -1;
+
+    return not_null;
+}
+

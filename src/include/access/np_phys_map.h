@@ -31,6 +31,7 @@ typedef struct __attribute__((packed)) NeoPhysMapRecord
     ItemPointerData v_itemptr;
     Oid e_tbl_id;
     ItemPointerData e_itemptr;
+    ItemPointerData a_itemptr;
 } NeoPhysMapRecord;
 
 typedef struct  __attribute__((packed)) NeoEdgePhysMapRecord {

@@ -49,7 +49,7 @@ SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev",
 -- Vertex LTree Label Logic
 --
 SELECT create_graph('vertex_graph', 'public');
-SELECT create_vlabel('vertex_graph', 'person');
+SELECT create_vlabel('vertex_graph', 'person', ARRAY['EMPLOYEED', 'FREE']);
 
 SELECT * FROM np_graph graph WHERE graph.name = 'vertex_graph';
 select * FROM np_vertex_label_21;
@@ -61,19 +61,29 @@ select * from np_vertex_21_2_linked_list_meta;
 \d+ np_vertex_21_2_linked_list_meta
 \d+ np_vertex_21_2_1_linked_list
 \d+ np_vertex_21_2_arraylist
+\d+ np_vertex_21_2_annotations
  
+ /*
 SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
-
+*/
 SELECT create_vlabel('vertex_graph', 'person.employee.engineer');
+SELECT create_vlabel('vertex_graph', 'employee');
+SELECT create_vlabel('vertex_graph', 'engineer', ARRAY['EMPLOYEED', 'ON_PTO']);
+SELECT merge_vlabels('vertex_graph', 2, 3);
+SELECT merge_vlabels('vertex_graph', 5, 4);
 
+SELECT create_vlabel('vertex_graph', 'ON_PTO');
+SELECT create_vlabel('vertex_graph', 'new_label', ARRAY['person']);
+
+/*
 SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
-
+*/
 --
 -- Vertex with a Dictionary
 --
@@ -167,12 +177,29 @@ select * From np_vertex_1_1_1_linked_list;
 SELECT * FROM public.np_edge_21_1;
 
 SELECT insert_vertex(
-  vertex_build(1, 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+  vertex_build(1, 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype),
+   ARRAY['EMPLOYEED']
 );
 
 SELECT insert_vertex(
-  vertex_build(2, 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+  vertex_build(2, 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype),
+   ARRAY['FREE']
 );
+select * from np_vertex_21_2;
+select * from np_vertex_21_2_annotations;
+
+
+
+SELECT insert_vertex(
+  vertex_build(1, 21, 6, 0::smallint, '{"name": "Charlie", "age": 36}'::gtype),
+   ARRAY['FREE']
+);
+
+select * from np_vertex_21_6;
+select * from np_vertex_21_6_annotations;
+
+
+
 select * from np_vertex_21_1_phys_map;
 select insert_edge(
   vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
@@ -301,3 +328,10 @@ select * from np_vertex_21_1_phys_map;
 select * From np_vertex_21_1_1_linked_list;
 select * From np_vertex_21_1_2_linked_list;
 SELECT * FROM np_vertex_21_1_arraylist;
+
+
+
+select * FROM np_vertex_label_21;
+SELECT create_vlabel('vertex_graph', 'person', ARRAY['EMPLOYEED', 'FREE']);
+select * FROM np_vertex_label_21;
+select * from np_vertex_21_5_annotations;

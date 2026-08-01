@@ -34,6 +34,7 @@
 #include "utils/rel.h"
 #include "utils/relcache.h"
 #include "utils/syscache.h"
+#include "utils/array.h"
 
 #include "ltree.h"
 
@@ -592,12 +593,56 @@ fill_vertex_label_cache_data(label_cache_data *cache_data,
     bool is_null;
 
     cache_data->id         = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
-    cache_data->label      = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
+
+    Datum ltree_datum = heap_getattr(tuple, 2, tuple_desc, &is_null);
+    
+    /* Switch to Cache context so string/array allocations persist globally */
+    MemoryContext oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+    
+    cache_data->label = DatumGetLtreePCopy(ltree_datum);
+
+    /* 1. Generate the raw string */
+    char *raw_str = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
+    char *start = raw_str;
+    
+    /* 2. Strip the internal root '_' */
+    if (strncmp(start, "_.", 2) == 0) {
+        start += 2;
+    } else if (strcmp(start, "_") == 0) {
+        start = "";
+    }
+    
+    /* 3. Copy to cache memory and swap dots for colons */
+    cache_data->label_string = pstrdup(start);
+    for (char *c = cache_data->label_string; *c != '\0'; c++) {
+        if (*c == '.') {
+            *c = ':';
+        }
+    }
+    pfree(raw_str); /* free the temporary string */
+
     cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
     cache_data->phys_map         = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
     cache_data->linked_list_meta = DatumGetObjectId(heap_getattr(tuple, 5, tuple_desc, &is_null));
     cache_data->linked_list_seq  = DatumGetObjectId(heap_getattr(tuple, 6, tuple_desc, &is_null));
     cache_data->arraylist        = DatumGetObjectId(heap_getattr(tuple, 7, tuple_desc, &is_null));
+
+    /* Extract Annotation Table OID (Col 8) */
+    cache_data->annotations_tbl = DatumGetObjectId(heap_getattr(tuple, 8, tuple_desc, &is_null));
+    if (is_null) cache_data->annotations_tbl = InvalidOid;
+
+    /* Extract and Copy Annotation Map Array (Col 9) */
+    Datum map_datum = heap_getattr(tuple, 9, tuple_desc, &is_null);
+    if (is_null) {
+        cache_data->annotation_map = NULL;
+        cache_data->annotation_byte_size = 0;
+    } else {
+        cache_data->annotation_map = DatumGetArrayTypePCopy(map_datum); 
+        
+        /* Dynamically calculate the required byte size directly from the cached array */
+        int num_labels = ArrayGetNItems(ARR_NDIM(cache_data->annotation_map), ARR_DIMS(cache_data->annotation_map));
+        cache_data->annotation_byte_size = (num_labels + 7) / 8;
+    }
 }
 
 static void
@@ -614,6 +659,9 @@ fill_edge_label_cache_data(label_cache_data *cache_data,
     cache_data->linked_list_meta = InvalidOid;
     cache_data->linked_list_seq  = InvalidOid;
     cache_data->arraylist        = InvalidOid;
+    cache_data->annotations_tbl = InvalidOid;
+    cache_data->annotation_map = NULL;
+    cache_data->annotation_byte_size = 0;
 }
 
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id)

@@ -27,5 +27,6 @@ Oid public_catalog_namespace_id(void);
 Oid neopostgraph_catalog_namespace_id(void);
 
 Constraint *build_not_null_constraint(void);
+Constraint *build_unique_constraint(void);
 
 #endif

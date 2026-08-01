@@ -24,10 +24,13 @@ SELECT NeoPostGraph.create_graph('label_graph', 'public');
 SELECT NeoPostGraph.create_vlabel('label_graph', 'person');
 SELECT NeoPostGraph.create_vlabel('label_graph', 'software');
 
--- Hierarchical ltree labels (assuming create_vlabel handles ltree-style strings)
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee');
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee.engineer');
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.contractor');
+-- Creating Label Trees
+SELECT NeoPostGraph.create_vlabel('label_graph', 'employee');
+SELECT NeoPostGraph.merge_vlabels('label_graph', 2, 4);
+SELECT NeoPostGraph.create_vlabel('label_graph', 'engineer');
+SELECT NeoPostGraph.merge_vlabels('label_graph', 5, 6);
+SELECT NeoPostGraph.create_vlabel('label_graph', 'contractor');
+SELECT NeoPostGraph.merge_vlabels('label_graph', 2, 8);
 
 SELECT NeoPostGraph.create_graph('edge_case_graph', 'public');
 
@@ -43,7 +46,7 @@ SELECT NeoPostGraph.create_graph('match_test_graph', 'public');
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user');
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_admin');
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_profile');
-SELECT NeoPostGraph.create_vlabel('match_test_graph', 'users'); -- Plural vs Singular
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'users');
 
 -- Force the planner to use the gist index
 SET enable_seqscan = off;

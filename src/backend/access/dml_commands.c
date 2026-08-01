@@ -138,6 +138,8 @@ Datum
 insert_vertex(PG_FUNCTION_ARGS)
 {
     vertex *v = NP_GET_ARG_VERTEX(0);
+ArrayType *input_annots = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
+
     CommandId cid = GetCurrentCommandId(true);
     FullTransactionId current_fxid = GetTopFullTransactionId();
 
@@ -182,15 +184,99 @@ insert_vertex(PG_FUNCTION_ARGS)
     pfree(tuple_buf);
     table_close(rel, RowExclusiveLock);
 
+
+/* 5. Process Annotations via Entity Store */
+    ItemPointerData a_itemptr;
+    ItemPointerSetInvalid(&a_itemptr); /* Default to safely Invalid */
+
+    /* READ DIRECTLY FROM THE CACHE */
+    Oid annotations_tbl = label_cache->annotations_tbl;
+    ArrayType *map_array = label_cache->annotation_map;
+    int byte_size = label_cache->annotation_byte_size;
+
+    /* If this label supports annotations and requires a bitset */
+    if (OidIsValid(annotations_tbl) && byte_size > 0) {
+        
+        /* Allocate a bytea for the bitset */
+        bytea *bitset = (bytea *) palloc0(VARHDRSZ + byte_size);
+        SET_VARSIZE(bitset, VARHDRSZ + byte_size);
+        char *bits = VARDATA(bitset);
+
+        /* Parse inputs and map them to bit positions */
+        if (input_annots != NULL && map_array != NULL) {
+            Datum *input_d, *map_d;
+            bool *input_n, *map_n;
+            int input_count, map_count;
+            
+            deconstruct_array(input_annots, TEXTOID, -1, false, 'i', &input_d, &input_n, &input_count);
+            deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+            
+            for (int i = 0; i < input_count; i++) {
+                if (input_n[i]) continue;
+                char *in_str = TextDatumGetCString(input_d[i]);
+                int bit_pos = -1;
+                
+                for (int j = 0; j < map_count; j++) {
+                    if (map_n[j]) continue;
+                    if (strcmp(in_str, TextDatumGetCString(map_d[j])) == 0) {
+                        bit_pos = j;
+                        break;
+                    }
+                }
+                
+                if (bit_pos != -1) {
+                    /* Flip the bit for the matched annotation index */
+                    bits[bit_pos / 8] |= (1 << (bit_pos % 8));
+                } else {
+                    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("Annotation label '%s' is not valid for this structural label", in_str)));
+                }
+            }
+        }
+
+        /* Wrap the bytea bitset in the Entity Store physical tuple layout */
+        Size annot_payload_size = VARSIZE(bitset);
+        Size annot_total_size = MAXALIGN(SizeOfNPEntityTupleHeader + annot_payload_size);
+        
+        char *annot_tuple_buf = (char *) palloc0(annot_total_size);
+        NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) annot_tuple_buf;
+
+        annot_hdr->xmin = current_fxid;
+        annot_hdr->xmax = InvalidFullTransactionId;
+        annot_hdr->cmin = cid;
+        annot_hdr->cmax = InvalidCommandId;
+        ItemPointerSetInvalid(&annot_hdr->prev_itemptr);
+        annot_hdr->flags = 0;
+        annot_hdr->id = v->id;
+
+        memcpy(annot_hdr->serialized_entity, bitset, annot_payload_size);
+
+        /* Write the annotation directly to the page using the Entity Store TAM */
+        Relation annot_rel = table_open(annotations_tbl, RowExclusiveLock);
+        np_write_record_to_page(annot_rel, annot_tuple_buf, annot_total_size, &a_itemptr);
+        
+        pfree(annot_tuple_buf);
+        table_close(annot_rel, RowExclusiveLock);
+        
+    } else if (input_annots != NULL) {
+        /* User passed annotations to a label that doesn't support them */
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                errmsg("This structural label does not support annotations")));
+    }
+
+
     /* 5. Update the phys_map with the new topology pointer */
     Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
     
+    
     NeoPhysMapRecord rec = {
         .v_itemptr = v_itemptr,
-        .e_tbl_id = InvalidOid
+        .e_tbl_id = InvalidOid,
+        .a_itemptr = a_itemptr
     };
     ItemPointerSetInvalid(&rec.e_itemptr);
-    
+
+
     ItemPointerData dummy_tid;
     np_write_record_to_page(pmap_rel, (char *) &rec, sizeof(NeoPhysMapRecord), &dummy_tid);
 

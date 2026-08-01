@@ -87,7 +87,8 @@ Datum create_graph(PG_FUNCTION_ARGS)
     create_metadata_btree_index(edge_meta_tbl);
     create_metadata_gist_index(edge_meta_tbl);
     create_default_elabel(graph_id, edge_id_seq, namespace);
- 
+
+    create_label_catalog_table(graph_id);
 
     insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq);
 

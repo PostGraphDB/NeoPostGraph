@@ -39,6 +39,9 @@
 #include "tcop/utility.h"
 #include "parser/parse_type.h"
 
+#include "access/skey.h"
+#include "utils/fmgroids.h"
+
 #include "ltree.h"
 
 #include "catalog/np_label.h"
@@ -68,6 +71,8 @@ Oid create_vertex_label_linked_list_table(char *tbl_name, Oid namespace);
 Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace);
 int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map);
 Oid create_edge_tables(int graph_id, int label_id, Oid namespace);
+Oid create_vertex_label_annotation_table(char *tbl_name, Oid namespace, int byte_allocation_size);
+static void enforce_and_insert_label_catalog(Relation cat_rel, Relation idx_rel, char *label_name, char expected_type);
 
 Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
 {
@@ -114,6 +119,12 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
 
     insert_vertex_ll_meta(ll_meta_table, namespace,  ll_table, ll_id);
 
+
+    int byte_allocation_size = 0;
+
+    char *annot_tbl_name = psprintf("np_vertex_%d_%d_annotations", graph_id, label_id);
+    Oid annotations_tbl = create_vertex_label_annotation_table(annot_tbl_name, namespace, byte_allocation_size);
+
     insert_vertex_label(
         psprintf("np_vertex_label_%d", graph_id),
         DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
@@ -122,7 +133,8 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
         phys_map,
         arraylist,
         ll_seq,
-        ll_meta
+        ll_meta,
+        annotations_tbl, (Datum)0
     );
 
     Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
@@ -131,26 +143,87 @@ Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace)
     return vertex_tbl;
 }
 
+static void
+register_and_validate_labels(int graph_id, char *struct_label, ArrayType *annot_array)
+{
+    char *cat_name = psprintf("np_label_catalog_%d", graph_id);
+    char *idx_name = psprintf("np_label_catalog_%d_idx", graph_id);
+
+    Relation cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
+    Relation idx_rel = index_open(np_relation_id(idx_name, "index"), RowExclusiveLock);
+
+    /* 1. Register Structural Label */
+    enforce_and_insert_label_catalog(cat_rel, idx_rel, struct_label, 's');
+
+    /* 2. Register Annotation Labels */
+    if (annot_array) {
+        Datum *datums;
+        bool *nulls;
+        int count;
+        
+        deconstruct_array(annot_array, TEXTOID, -1, false, 'i', &datums, &nulls, &count);
+        
+        for (int i = 0; i < count; i++) {
+            if (nulls[i]) continue;
+            char *annot_str = TextDatumGetCString(datums[i]);
+            
+            /* Prevent self-collision in the exact same command */
+            if (strcmp(annot_str, struct_label) == 0) {
+                index_close(idx_rel, RowExclusiveLock);
+                table_close(cat_rel, RowExclusiveLock);
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("Label '%s' cannot be passed as both structural and annotation", struct_label)));
+            }
+            
+            enforce_and_insert_label_catalog(cat_rel, idx_rel, annot_str, 'a');
+        }
+    }
+
+    index_close(idx_rel, RowExclusiveLock);
+    table_close(cat_rel, RowExclusiveLock);
+}
+
 PG_FUNCTION_INFO_V1(create_vlabel);
 Datum create_vlabel(PG_FUNCTION_ARGS)
 {
+
+    // Shift namespace check to index 3
     Oid namespace;
-    if (PG_ARGISNULL(2)) {
+    if (PG_ARGISNULL(3)) {
         List *search_path = fetch_search_path(false);
         if (list_length(search_path) < 1)
             ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                             errmsg("create_vlabel requires a search path when namespace is not specified")));
 
         namespace = linitial_oid(search_path);
-    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(2)), true))) {
+    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(3)), true))) {
         ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("namespace \"%s\" does not exist", TextDatumGetCString(PG_GETARG_DATUM(2)))));
+                        errmsg("namespace \"%s\" does not exist", TextDatumGetCString(PG_GETARG_DATUM(3)))));
     }
 
-    // validate the label
-    if (PG_ARGISNULL(1))
+    /* 1. Extract the text and validate it is a single token */
+    char *label_str = text_to_cstring(PG_GETARG_TEXT_PP(1));
+    if (strchr(label_str, '.') != NULL) {
         ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("label must not be NULL")));
+                        errmsg("Base labels cannot contain dots. Use merge_vlabels to build hierarchies.")));
+    }
+    
+    /* Convert the validated string into an ltree datum */
+    Datum label_ltree = DirectFunctionCall1(ltree_in, CStringGetDatum(label_str));
+
+
+    ArrayType *annot_array;
+    Datum annot_map_datum;
+    int byte_allocation_size = 0;
+    
+    if (PG_ARGISNULL(2)) {
+        annot_array = NULL;
+        annot_map_datum = (Datum)0;
+    } else {
+        annot_array = PG_GETARG_ARRAYTYPE_P(2);
+        annot_map_datum = PointerGetDatum(annot_array);
+        byte_allocation_size = (ArrayGetNItems(ARR_NDIM(annot_array), ARR_DIMS(annot_array)) + 7) / 8;
+    }
 
     // fetch the graph name
     if (PG_ARGISNULL(0))
@@ -158,16 +231,18 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
                         errmsg("graph name must not be NULL")));
     char *graph_name = NameStr(*PG_GETARG_NAME(0));
 
-    // fetch the graph cache for the graph_id and vertex_id_seq
+    // fetch the graph cache
     graph_cache_data *entry = search_graph_name_namespace_cache(graph_name, namespace);
     if (!entry)
         ereport(ERROR,
                 (errcode(ERRCODE_UNDEFINED_SCHEMA),
                 errmsg("graph \"%s\" does not exist \"%s\".", graph_name, get_namespace_name(namespace)),
-                PG_ARGISNULL(1) ?
-                    errhint("When namespace is not specified, the graph is created in the first namespace in the search path. Consider changing the search path or specifying a namespace explicitly.") :
+                PG_ARGISNULL(3) ?
+                    errhint("When namespace is not specified, the graph is created in the first namespace in the search path.") :
                     errhint("Use a different graph name or create the graph.")
                 ));
+
+    register_and_validate_labels(entry->id, label_str, annot_array);
 
     Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->vertex_id_seq)));
     Oid vertex_tbl = create_vertex_tables(entry->id, label_id, namespace);
@@ -182,20 +257,206 @@ Datum create_vlabel(PG_FUNCTION_ARGS)
     Oid ll = create_vertex_label_linked_list_table(psprintf("np_vertex_%d_%d_%d_linked_list", entry->id, label_id, ll_id), namespace);
     insert_vertex_ll_meta(ll_meta_table, namespace, ll, ll_id);
 
+    char *annot_tbl_name = psprintf("np_vertex_%d_%d_annotations", entry->id, label_id);
+    Oid annotations_tbl = create_vertex_label_annotation_table(annot_tbl_name, namespace, byte_allocation_size);
+
     insert_vertex_label(
         psprintf("np_vertex_label_%d", entry->id),
         DirectFunctionCall2(ltree_addltree,
             DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
-            PG_GETARG_DATUM(1)
+            label_ltree
         ),
         label_id,
         vertex_tbl,
         phys_map,
-        arraylist, ll_seq, ll_meta);
+        arraylist, 
+        ll_seq, 
+        ll_meta,
+        annotations_tbl,annot_map_datum
+    );
 
     create_vertex_property_dictionary(entry->id, vertex_tbl);
-    //create_vertex_tables(entry->id, label_id, namespace);
-    ereport(NOTICE, (errmsg("vlabel \"%s\" has been created", graph_name)));
+    ereport(NOTICE, (errmsg("vlabel \"%s\" has been created", label_str)));
+
+    PG_RETURN_VOID();
+}
+static ArrayType *merge_and_dedupe_text_arrays(ArrayType *arr1, ArrayType *arr2)
+{
+    if (!arr1 && !arr2) return NULL;
+    if (!arr1) return arr2;
+    if (!arr2) return arr1;
+
+    Datum *d1, *d2;
+    bool *n1, *n2;
+    int c1, c2;
+
+    deconstruct_array(arr1, TEXTOID, -1, false, 'i', &d1, &n1, &c1);
+    deconstruct_array(arr2, TEXTOID, -1, false, 'i', &d2, &n2, &c2);
+
+    Datum *d_out = palloc((c1 + c2) * sizeof(Datum));
+    int c_out = 0;
+
+    for (int i = 0; i < c1; i++) {
+        if (n1[i]) continue;
+        d_out[c_out++] = d1[i];
+    }
+
+    for (int i = 0; i < c2; i++) {
+        if (n2[i]) continue;
+        char *s2 = TextDatumGetCString(d2[i]);
+        bool duplicate = false;
+        
+        for (int j = 0; j < c_out; j++) {
+            char *s1 = TextDatumGetCString(d_out[j]);
+            if (strcmp(s1, s2) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        
+        if (!duplicate) d_out[c_out++] = d2[i];
+    }
+
+    if (c_out == 0) return NULL;
+    return construct_array(d_out, c_out, TEXTOID, -1, false, 'i');
+}
+PG_FUNCTION_INFO_V1(merge_vlabels);
+Datum merge_vlabels(PG_FUNCTION_ARGS)
+{
+    Oid namespace;
+    
+    if (PG_ARGISNULL(3)) {
+        List *search_path = fetch_search_path(false);
+        if (list_length(search_path) < 1)
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("Requires a search path when namespace is not specified")));
+        namespace = linitial_oid(search_path);
+    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(3)), true))) {
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("namespace does not exist")));
+    }
+
+    char *graph_name = NameStr(*PG_GETARG_NAME(0));
+    int32 parent_id = PG_GETARG_INT32(1);
+    int32 child_id = PG_GETARG_INT32(2);
+
+    graph_cache_data *entry = search_graph_name_namespace_cache(graph_name, namespace);
+    if (!entry)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA), errmsg("graph does not exist")));
+
+    /* 1. Open the metadata table for scanning */
+    Relation meta_rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", entry->id), "table"), AccessShareLock);
+    SysScanDesc scan;
+    HeapTuple tuple;
+    
+    Datum parent_ltree_datum = (Datum)0, child_ltree_datum = (Datum)0;
+    ArrayType *parent_annot = NULL, *child_annot = NULL;
+    bool found_parent = false, found_child = false;
+
+    /* 2. Direct sequential scan to find the two labels (fast for metadata catalogs) */
+    scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+        bool isnull;
+        int32 current_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+        
+        if (current_id == parent_id || current_id == child_id) {
+            Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+            Datum annot_val = heap_getattr(tuple, 9, RelationGetDescr(meta_rel), &isnull); // annotation_map is col 9
+            
+            if (current_id == parent_id) {
+                parent_ltree_datum = ltree_val;
+                if (!isnull) parent_annot = DatumGetArrayTypeP(annot_val);
+                found_parent = true;
+            } else {
+                child_ltree_datum = ltree_val;
+                if (!isnull) child_annot = DatumGetArrayTypeP(annot_val);
+                found_child = true;
+            }
+        }
+    }
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+
+    if (!found_parent || !found_child) {
+        ereport(ERROR, (errmsg("Failed to find parent or child label in metadata catalog")));
+    }
+
+    /* 3. Merge the ltree paths natively */
+    char *parent_str = DatumGetCString(DirectFunctionCall1(ltree_out, parent_ltree_datum));
+    char *child_str  = DatumGetCString(DirectFunctionCall1(ltree_out, child_ltree_datum));
+
+    /* Purge CATALOG_LTREE_ROOT_LABEL from parent */
+    if (strncmp(parent_str, CATALOG_LTREE_ROOT_LABEL ".", strlen(CATALOG_LTREE_ROOT_LABEL) + 1) == 0) {
+        parent_str += strlen(CATALOG_LTREE_ROOT_LABEL) + 1;
+    } else if (strcmp(parent_str, CATALOG_LTREE_ROOT_LABEL) == 0) {
+        parent_str += strlen(CATALOG_LTREE_ROOT_LABEL);
+    }
+
+    /* Purge CATALOG_LTREE_ROOT_LABEL from child */
+    if (strncmp(child_str, CATALOG_LTREE_ROOT_LABEL ".", strlen(CATALOG_LTREE_ROOT_LABEL) + 1) == 0) {
+        child_str += strlen(CATALOG_LTREE_ROOT_LABEL) + 1;
+    } else if (strcmp(child_str, CATALOG_LTREE_ROOT_LABEL) == 0) {
+        child_str += strlen(CATALOG_LTREE_ROOT_LABEL);
+    }
+
+    /* Reconstruct with the root label safely at the front */
+    char *merged_ltree_str;
+    if (parent_str[0] == '\0' && child_str[0] == '\0') {
+        merged_ltree_str = pstrdup(CATALOG_LTREE_ROOT_LABEL);
+    } else if (parent_str[0] == '\0') {
+        merged_ltree_str = psprintf("%s.%s", CATALOG_LTREE_ROOT_LABEL, child_str);
+    } else if (child_str[0] == '\0') {
+        merged_ltree_str = psprintf("%s.%s", CATALOG_LTREE_ROOT_LABEL, parent_str);
+    } else {
+        merged_ltree_str = psprintf("%s.%s.%s", CATALOG_LTREE_ROOT_LABEL, parent_str, child_str);
+    }
+
+    Datum merged_ltree_datum = DirectFunctionCall1(ltree_in, CStringGetDatum(merged_ltree_str));
+
+    /* 4. Merge and dedupe the annotation arrays natively */
+    ArrayType *merged_array = merge_and_dedupe_text_arrays(parent_annot, child_annot);
+    Datum merged_array_datum = (merged_array != NULL) ? PointerGetDatum(merged_array) : (Datum)0;
+
+    int byte_allocation_size = 0;
+    if (merged_array != NULL) {
+        byte_allocation_size = (ArrayGetNItems(ARR_NDIM(merged_array), ARR_DIMS(merged_array)) + 7) / 8;
+    }
+
+    /* 5. Provision the physical tables for the new merged label */
+    Oid new_label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->vertex_id_seq)));
+    
+    Oid vertex_tbl = create_vertex_tables(entry->id, new_label_id, namespace);
+    Oid phys_map = create_label_vertex_physical_mapping_table(psprintf("np_vertex_%d_%d_phys_map", entry->id, new_label_id), namespace);
+    Oid arraylist = create_vertex_label_arraylist_table(psprintf("np_vertex_%d_%d_arraylist", entry->id, new_label_id), namespace);
+    
+    Oid ll_seq = create_linked_list_table_sequence(psprintf("np_vertex_%d_%d_linked_list_seq", entry->id, new_label_id), "neopostgraph");    
+    Oid ll_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(ll_seq)));
+    
+    char *ll_meta_table = psprintf("np_vertex_%d_%d_linked_list_meta", entry->id, new_label_id);
+    Oid ll_meta = create_vertex_label_linked_list_metadata_table(ll_meta_table, namespace);
+    Oid ll = create_vertex_label_linked_list_table(psprintf("np_vertex_%d_%d_%d_linked_list", entry->id, new_label_id, ll_id), namespace);
+    insert_vertex_ll_meta(ll_meta_table, namespace, ll, ll_id);
+
+    char *annot_tbl_name = psprintf("np_vertex_%d_%d_annotations", entry->id, new_label_id);
+    Oid annotations_tbl = create_vertex_label_annotation_table(annot_tbl_name, namespace, byte_allocation_size);
+
+    /* 6. Insert the new metadata record */
+    insert_vertex_label(
+        psprintf("np_vertex_label_%d", entry->id),
+        merged_ltree_datum,
+        new_label_id,
+        vertex_tbl,
+        phys_map,
+        arraylist, 
+        ll_seq, 
+        ll_meta,
+        annotations_tbl,
+        merged_array_datum
+    );
+
+    create_vertex_property_dictionary(entry->id, vertex_tbl);
+    
+    ereport(NOTICE, (errmsg("Merged vlabel \"%s\" has been created", merged_ltree_str)));
 
     PG_RETURN_VOID();
 }
@@ -430,20 +691,25 @@ int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl)
     CommandCounterIncrement();
 }
 
-int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta)
+int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta, Oid annotations_tbl, Datum annotation_map)
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
 
-    Datum values[7] = {
+    Datum values[9] = {
         ObjectIdGetDatum(label_id),
         label,
         ObjectIdGetDatum(tbl),
         ObjectIdGetDatum(phys_map),
         ObjectIdGetDatum(ll_meta),
         ObjectIdGetDatum(ll_seq),
-        ObjectIdGetDatum(arraylist)
+        ObjectIdGetDatum(arraylist),
+        ObjectIdGetDatum(annotations_tbl),
+        annotation_map
     };
-    bool nulls[7] = { false, false, false, false, false };
+    bool nulls[9] = { false, false, false, false, false, false, false };
+
+    if (annotation_map == (Datum)0)
+        nulls[8] = true;
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
@@ -885,9 +1151,10 @@ Oid create_label_vertex_physical_mapping_table(char *tbl_name, Oid namespace)
 
     create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
 
-    create_stmt->tableElts = list_make3(makeColumnDef("v_itemptr", TIDOID, -1, InvalidOid),
+    create_stmt->tableElts = list_make4(makeColumnDef("v_itemptr", TIDOID, -1, InvalidOid),
                                         makeColumnDef("e_tbl_id", REGCLASSOID, -1, InvalidOid),
-                                        makeColumnDef("e_itemptr", TIDOID, -1, InvalidOid));
+                                        makeColumnDef("e_itemptr", TIDOID, -1, InvalidOid),
+                                        makeColumnDef("a_itemptr", TIDOID, -1, InvalidOid));
     create_stmt->accessMethod = "np_mutable";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
@@ -927,7 +1194,7 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
-    ltree->constraints = list_make1(build_not_null_constraint());
+    ltree->constraints = list_make2(build_not_null_constraint(), build_unique_constraint());
     ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
     vertex_tbl->constraints = list_make1(build_not_null_constraint());
     ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
@@ -938,10 +1205,15 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     linked_list_seq->constraints = list_make1(build_not_null_constraint());
     ColumnDef *arraylist = makeColumnDef("arraylist", REGCLASSOID, -1, InvalidOid);
     arraylist->constraints = list_make1(build_not_null_constraint());
-
+    ColumnDef *annotations_tbl = makeColumnDef("annotations_tbl", REGCLASSOID, -1, InvalidOid);
+    annotations_tbl->constraints = list_make1(build_not_null_constraint());
+    ColumnDef *annotation_map = makeColumnDef("annotation_map", TEXTARRAYOID, -1, InvalidOid);
+    
     List *tableElts = list_make5(id, ltree, vertex_tbl, phys_map, linked_list_meta);
     tableElts = lappend(tableElts, linked_list_seq);
     tableElts = lappend(tableElts, arraylist);
+    tableElts = lappend(tableElts, annotations_tbl);
+    tableElts = lappend(tableElts, annotation_map);
     create_stmt->tableElts = tableElts;
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
@@ -968,6 +1240,106 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     return get_relname_relid(meta_tbl_name, get_namespace_oid("neopostgraph", false));
 }
 
+static void
+enforce_and_insert_label_catalog(Relation cat_rel, Relation idx_rel, char *label_name, char expected_type)
+{
+    ScanKeyData skey[1];
+    Datum name_datum = CStringGetTextDatum(label_name);
+    
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, name_datum);
+
+    SysScanDesc scan = systable_beginscan(cat_rel, RelationGetRelid(idx_rel), true, NULL, 1, skey);
+    HeapTuple tuple = systable_getnext(scan);
+
+    if (HeapTupleIsValid(tuple)) {
+        bool isnull;
+        char actual_type = DatumGetChar(heap_getattr(tuple, 2, RelationGetDescr(cat_rel), &isnull));
+        
+        if (actual_type != expected_type) {
+            systable_endscan(scan);
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("Label '%s' is already registered as a %s label", 
+                           label_name, actual_type == 's' ? "structural" : "annotation")));
+        }
+    } else {
+        /* Not found, safe to insert */
+        Datum values[2] = { name_datum, CharGetDatum(expected_type) };
+        bool nulls[2] = { false, false };
+
+        HeapTuple newtup = heap_form_tuple(RelationGetDescr(cat_rel), values, nulls);
+        CatalogTupleInsert(cat_rel, newtup);
+        heap_freetuple(newtup);
+    }
+    
+    systable_endscan(scan);
+}
+Oid create_label_catalog_table(int graph_id)
+{
+    CreateStmt *create_stmt = makeNode(CreateStmt);
+    PlannedStmt *wrapper;
+    char *tbl_name = psprintf("np_label_catalog_%d", graph_id);
+
+    create_stmt->relation = makeRangeVar("neopostgraph", tbl_name, -1);
+
+    ColumnDef *label_name = makeColumnDef("label_name", TEXTOID, -1, InvalidOid);
+    label_name->constraints = list_make1(build_not_null_constraint());
+    
+    ColumnDef *label_type = makeColumnDef("label_type", CHAROID, -1, InvalidOid);
+    label_type->constraints = list_make1(build_not_null_constraint());
+
+    create_stmt->tableElts = list_make2(label_name, label_type);
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated label catalog CREATE TABLE)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
+    CommandCounterIncrement();
+
+    /* Create the Unique B-Tree Index for O(1) lookups */
+    IndexStmt *idx_stmt = makeNode(IndexStmt);
+    idx_stmt->idxname = psprintf("np_label_catalog_%d_idx", graph_id);
+    idx_stmt->relation = makeRangeVar("neopostgraph", tbl_name, -1);
+
+    IndexElem *idx_elem = makeNode(IndexElem);
+    idx_elem->name = "label_name";
+
+    idx_stmt->accessMethod = "btree";
+    idx_stmt->tableSpace = NULL;
+    idx_stmt->indexParams = list_make1(idx_elem);
+    idx_stmt->unique = true;
+    idx_stmt->primary = true;
+    idx_stmt->isconstraint = true;
+    idx_stmt->concurrent = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)idx_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated label catalog CREATE INDEX)", false,
+                   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver, NULL);
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, get_namespace_oid("neopostgraph", false));
+}
+
+
+
 Oid create_label_metadata_table(char *meta_tbl_name)
 {
     CreateStmt *create_stmt;
@@ -981,7 +1353,7 @@ Oid create_label_metadata_table(char *meta_tbl_name)
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
-    ltree->constraints = list_make1(build_not_null_constraint());
+    ltree->constraints = list_make2(build_not_null_constraint(), build_unique_constraint());
     ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
     ltree->constraints = list_make1(build_not_null_constraint());
     ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
@@ -1202,4 +1574,49 @@ rotate_active_linked_list_table(PG_FUNCTION_ARGS)
     );
 
     PG_RETURN_VOID();
+}
+
+
+Oid
+create_vertex_label_annotation_table(char *tbl_name, Oid namespace, int byte_allocation_size)
+{
+    CreateStmt *create_stmt;
+    PlannedStmt *wrapper;
+
+    create_stmt = makeNode(CreateStmt);
+    create_stmt->relation = makeRangeVar(get_namespace_name(namespace), tbl_name, -1);
+
+    /* Column 1: Vertex ID */
+    ColumnDef *id = makeColumnDef("id", INT8OID, -1, InvalidOid);
+    id->constraints = list_make1(build_not_null_constraint());
+    
+    /* Column 2: Ancestor Bitsets (Bitmap Set) */
+    ColumnDef *annotations = makeColumnDef("annotations", BYTEAOID, byte_allocation_size, InvalidOid);
+    
+    create_stmt->tableElts = list_make2(id, annotations);
+    
+    create_stmt->accessMethod = "entity_store"; 
+    create_stmt->inhRelations = NIL;
+    create_stmt->partbound = NULL;
+    create_stmt->ofTypename = NULL;
+    create_stmt->constraints = NIL;
+    create_stmt->options = NIL;
+    create_stmt->oncommit = ONCOMMIT_NOOP;
+    create_stmt->tablespacename = NULL;
+    create_stmt->if_not_exists = false;
+
+    wrapper = makeNode(PlannedStmt);
+    wrapper->commandType = CMD_UTILITY;
+    wrapper->canSetTag = false;
+    wrapper->utilityStmt = (Node *)create_stmt;
+    wrapper->stmt_location = -1;
+    wrapper->stmt_len = 0;
+
+    ProcessUtility(wrapper, "(generated annotation CREATE TABLE)",
+                   false, PROCESS_UTILITY_SUBCOMMAND, NULL, NULL,
+                   None_Receiver, NULL);
+
+    CommandCounterIncrement();
+
+    return get_relname_relid(tbl_name, namespace);
 }
