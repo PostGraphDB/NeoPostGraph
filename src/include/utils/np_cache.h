@@ -18,6 +18,8 @@
 
 #include "postgres.h"
 
+#include "access/xact.h"
+
 #include "ltree.h"
 
 #include "utils/dictionary.h"
@@ -32,6 +34,8 @@ typedef struct graph_cache_data
     Oid vertex_id_seq;
     Oid edge_labels;
     Oid edge_id_seq;
+    Oid annot_schema_tbl;
+    Oid annot_schema_phys_map;
 } graph_cache_data;
 
 typedef struct label_cache_data
@@ -56,11 +60,12 @@ typedef struct vertex_dictionary_cache_data
     dictionary *dict;
 } vertex_dictionary_cache_data;
 
+const graph_cache_data *search_graph_id_cache(int graph_id);
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, Oid namespace);
 const label_cache_data *search_vertex_label_graph_id_label_id_cache(int graph_id, int label_id);
 const label_cache_data *search_edge_label_graph_id_label_id_cache(int graph_id, int label_id);
 
-
+void np_cache_xact_callback(XactEvent event, void *arg);
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id);
 
 

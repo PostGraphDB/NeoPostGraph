@@ -335,3 +335,40 @@ select * FROM np_vertex_label_21;
 SELECT create_vlabel('vertex_graph', 'person', ARRAY['EMPLOYEED', 'FREE']);
 select * FROM np_vertex_label_21;
 select * from np_vertex_21_5_annotations;
+
+
+
+select * FROM np_vertex_label_21;
+SELECT add_annotation_label('vertex_graph', 'person', 'Active');
+
+SELECT insert_vertex(
+  vertex_build(3, 21, 2, 0::smallint, '{"name": "David", "age": 27}'::gtype),
+   ARRAY['Active']
+);
+
+select * FROM np_vertex_label_21;
+select * from np_vertex_21_2;
+select * from np_vertex_21_2_annotations;
+select * from np_vertex_21_4_annotations;
+select * from np_vertex_21_5_annotations;
+select * from np_vertex_21_6_annotations;
+
+
+
+select add_vertex_annotation_label(1, 2, 21, 'Active');
+select * from np_vertex_21_2;
+select * from np_vertex_21_2_annotations;
+
+
+select remove_vertex_annotation_label(2, 2, 21, 'FREE');
+select * from np_vertex_21_2;
+select * from np_vertex_21_2_annotations;
+
+
+select drop_annotation_label('vertex_graph', 'person', 'Active');
+select * FROM np_vertex_label_21;
+select * from np_vertex_21_2;
+select * from np_vertex_21_2_annotations;
+select * from np_vertex_21_4_annotations;
+select * from np_vertex_21_5_annotations;
+select * from np_vertex_21_6_annotations;

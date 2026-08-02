@@ -276,52 +276,6 @@ get_phys_map_vpointer(Relation pmap_rel, ItemPointer pmap_tid)
     return v_tid;
 }
 
-static void 
-np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
-{
-    BlockNumber blockNum = RelationGetNumberOfBlocks(rel);
-
-    Buffer buffer;
-    if (blockNum == 0) {
-        buffer = ReadBuffer(rel, P_NEW);
-        blockNum = BufferGetBlockNumber(buffer);
-    } else {
-        buffer = ReadBuffer(rel, blockNum - 1);
-        blockNum = BufferGetBlockNumber(buffer);
-    }
-
-    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    Page page = BufferGetPage(buffer);
-
-    if (PageIsNew(page)) {
-        PageInit(page, BufferGetPageSize(buffer), 0);
-    }
-
-    OffsetNumber offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-
-    if (offnum == InvalidOffsetNumber) {
-        UnlockReleaseBuffer(buffer);
-        
-        buffer = ReadBuffer(rel, P_NEW);
-        LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-        page = BufferGetPage(buffer);
-        PageInit(page, BufferGetPageSize(buffer), 0);
-        
-        offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-        blockNum = BufferGetBlockNumber(buffer);
-        
-        if (offnum == InvalidOffsetNumber)
-            elog(ERROR, "NeoPostGraph: Failed to add tuple to new page");
-    }
-
-    ItemPointerSet(out_tid, blockNum, offnum);
-
-    MarkBufferDirty(buffer);
-    
-    // (TODO: WAL logging)
-
-    UnlockReleaseBuffer(buffer);
-}
 
 static void 
 np_physmap_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,

@@ -168,6 +168,16 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION add_annotation_label(graph_name name, structural_label text, new_annotation_label text, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION drop_annotation_label(graph_name name, structural_label text, annotation_label_to_drop text, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 -- DML Commands
 --
@@ -183,6 +193,16 @@ CREATE FUNCTION insert_vertex(vertex, annotations text[] Default NULL)
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION add_vertex_annotation_label(vertex_id bigint, label_id integer, graph_id integer, annotation_label text)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION remove_vertex_annotation_label(vertex_id bigint, label_id integer, graph_id integer, annotation_label text)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'remove_vertex_annotation_label';
 
 CREATE FUNCTION update_vertex(id int8, labelid int4, graphid int4, new_properties gtype)
 RETURNS void
@@ -344,7 +364,9 @@ CREATE TABLE np_graph (
     vertex_labels regclass NOT NULL,
     vertex_id_seq regclass NOT NULL,
     edge_labels regclass NOT NULL,
-    edge_id_seq regclass NOT NULL
+    edge_id_seq regclass NOT NULL,
+    annot_schema_tbl regclass NOT NULL,
+    annot_schema_phys_map regclass NOT NULL
 );
 
 CREATE SEQUENCE np_graph_id_seq START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE 5;

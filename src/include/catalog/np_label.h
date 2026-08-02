@@ -43,7 +43,10 @@ void create_metadata_btree_index(char *tbl_name);
 void create_metadata_gist_index(char *tbl_name);
 
 Oid create_label_sequence(char *seq_name, char *namespace);
-
+Oid create_annotation_schema_table(int graph_id, Oid namespace);
+Oid create_annotation_schema_phys_map_table(int graph_id, Oid namespace);
 Oid create_vertex_tables(int graphid, int vertex_id_seq, Oid namespace);
+void
+insert_annotation_schema(int32 graph_id, int32 label_id, ArrayType *annot_array, Oid schema_tbl, Oid schema_pmap);
 
 #endif

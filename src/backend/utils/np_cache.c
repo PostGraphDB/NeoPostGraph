@@ -36,6 +36,7 @@
 #include "utils/syscache.h"
 #include "utils/array.h"
 
+
 #include "ltree.h"
 
 #include "catalog/np_graph.h"
@@ -376,6 +377,9 @@ static void flush_graph_name_namespace_cache(void)
 {
     HASH_SEQ_STATUS hash_seq;
 
+    if (graph_name_namespace_cache_hash == NULL)
+        return;
+
     hash_seq_init(&hash_seq, graph_name_namespace_cache_hash);
     for (;;)
     {
@@ -392,6 +396,9 @@ static void flush_vertex_label_cache(void)
 {
     HASH_SEQ_STATUS hash_seq;
 
+    if (vertex_label_graph_id_id_cache_hash == NULL)
+        return;
+
     hash_seq_init(&hash_seq, vertex_label_graph_id_id_cache_hash);
     for (;;)
     {
@@ -407,6 +414,9 @@ static void flush_vertex_label_cache(void)
 static void flush_dictionary_cache(void)
 {
     HASH_SEQ_STATUS hash_seq;
+
+    if (vertex_dictionary_cache_hash == NULL)
+        return;
 
     hash_seq_init(&hash_seq, vertex_dictionary_cache_hash);
     for (;;)
@@ -469,7 +479,65 @@ static graph_cache_data *search_graph_name_namespace_cache_miss(graph_name_names
 
     return &entry->data;
 }
+const graph_cache_data *search_graph_id_cache(int graph_id)
+{
+    HASH_SEQ_STATUS hash_seq;
+    graph_name_namespace_cache_entry *entry;
 
+    initialize_caches();
+
+    if (!graph_name_namespace_cache_hash)
+        return NULL;
+
+    /* Iterate through the existing in-memory graph cache entries */
+    hash_seq_init(&hash_seq, graph_name_namespace_cache_hash);
+    while ((entry = (graph_name_namespace_cache_entry *) hash_seq_search(&hash_seq)) != NULL)
+    {
+        if (entry->data.id == graph_id)
+        {
+            /* Terminate the scan early once we find the matching ID */
+            hash_seq_term(&hash_seq);
+            return &entry->data;
+        }
+    }
+
+    /* 
+     * If it's not in the cache yet, we fall back to scanning the np_graph 
+     * catalog table directly by OID/ID to warm the cache or return NULL.
+     */
+    Relation np_graph = table_open(np_graph_relation_id(), AccessShareLock);
+    SysScanDesc scan_desc = systable_beginscan(np_graph, InvalidOid, false, NULL, 0, NULL);
+    HeapTuple tuple;
+
+    while (HeapTupleIsValid(tuple = systable_getnext(scan_desc)))
+    {
+        bool is_null;
+        Oid cat_id = DatumGetObjectId(heap_getattr(tuple, 1, RelationGetDescr(np_graph), &is_null));
+        
+        if (cat_id == graph_id)
+        {
+            /* Found it on disk! Populate a cache key and warm the cache */
+            graph_name_namespace_cache_key key;
+            key.namespace = DatumGetObjectId(heap_getattr(tuple, 3, RelationGetDescr(np_graph), &is_null));
+            namestrcpy(&key.name, DatumGetName(heap_getattr(tuple, 2, RelationGetDescr(np_graph), &is_null))->data);
+
+            graph_name_namespace_cache_entry *new_entry = 
+                hash_search(graph_name_namespace_cache_hash, &key, HASH_ENTER, NULL);
+
+            fill_graph_cache_data(&new_entry->data, tuple, RelationGetDescr(np_graph));
+
+            systable_endscan(scan_desc);
+            table_close(np_graph, AccessShareLock);
+
+            return &new_entry->data;
+        }
+    }
+
+    systable_endscan(scan_desc);
+    table_close(np_graph, AccessShareLock);
+
+    return NULL;
+}
 static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc)
 {
     bool is_null;
@@ -487,6 +555,10 @@ static void fill_graph_cache_data(graph_cache_data *cache_data, HeapTuple tuple,
     cache_data->edge_labels = DatumGetObjectId(heap_getattr(tuple, 6, tuple_desc, &is_null));
     // np_graph.edge_id_seq
     cache_data->edge_id_seq = DatumGetObjectId(heap_getattr(tuple, 7, tuple_desc, &is_null));
+    // np_graph.annot_schema_tbl
+    cache_data->annot_schema_tbl = DatumGetObjectId(heap_getattr(tuple, 8, tuple_desc, &is_null));
+    // np_graph.annot_schema_phys_map
+    cache_data->annot_schema_phys_map = DatumGetObjectId(heap_getattr(tuple, 9, tuple_desc, &is_null)); 
 }
 
 const label_cache_data *search_edge_label_graph_id_label_id_cache(int graph_id, int label_id)
@@ -726,3 +798,30 @@ static void fill_dict_cache_data(vertex_dictionary_cache_data *cache_data, HeapT
     cache_data->dict = DATUM_GET_DICTIONARY(heap_getattr(tuple, 2, tuple_desc, &is_null));
 }
 
+
+
+/* 
+ * Callback to handle transaction commits and aborts.
+ * If a transaction aborts, any cached graph or label structures 
+ * might be out of sync with disk, so we blow them away.
+ */
+void
+np_cache_xact_callback(XactEvent event, void *arg)
+{
+    switch (event)
+    {
+        case XACT_EVENT_ABORT:
+        case XACT_EVENT_PARALLEL_ABORT:
+            flush_graph_name_namespace_cache();
+            flush_vertex_label_cache();
+            flush_dictionary_cache();
+
+            break;
+
+        case XACT_EVENT_COMMIT:
+            break;
+            
+        default:
+            break;
+    }
+}

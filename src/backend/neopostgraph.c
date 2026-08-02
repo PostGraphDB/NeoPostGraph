@@ -21,6 +21,7 @@
 #include "utils/guc.h"
 #include "utils/elog.h"
 
+#include "utils/np_cache.h"
 #include "utils/vertex.h"
 #include "access/np_phys_map.h"
 
@@ -56,6 +57,8 @@ void _PG_init(void)
         NULL
     );
     MarkGUCPrefixReserved("neopostgraph");
+
+    RegisterXactCallback(np_cache_xact_callback, NULL);
 
     ereport(LOG, "PostGraph extension initialized");
 }

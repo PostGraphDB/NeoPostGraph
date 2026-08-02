@@ -69,7 +69,7 @@ static void update_edge_prev_pointer(Relation list_rel,
                                      ItemPointer new_tid,
                                      CommandId cid);
 
-static void 
+void 
 np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
 {
     Buffer buffer;
@@ -185,56 +185,107 @@ ArrayType *input_annots = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
     table_close(rel, RowExclusiveLock);
 
 
-/* 5. Process Annotations via Entity Store */
+    /* 5. Process Annotations via Entity Store */
     ItemPointerData a_itemptr;
     ItemPointerSetInvalid(&a_itemptr); /* Default to safely Invalid */
 
-    /* READ DIRECTLY FROM THE CACHE */
     Oid annotations_tbl = label_cache->annotations_tbl;
-    ArrayType *map_array = label_cache->annotation_map;
-    int byte_size = label_cache->annotation_byte_size;
 
-    /* If this label supports annotations and requires a bitset */
-    if (OidIsValid(annotations_tbl) && byte_size > 0) {
+    if (OidIsValid(annotations_tbl) && input_annots != NULL) {
         
+        /* 
+         * A. Load the LATEST Schema Array dynamically from the Schema Entity Store 
+         * instead of using the frozen label_cache->annotation_map
+         */
+        ArrayType *map_array = NULL;
+        const graph_cache_data *graph_cache = search_graph_id_cache(v->graph_id);
+
+        if (graph_cache && OidIsValid(graph_cache->annot_schema_phys_map) && OidIsValid(graph_cache->annot_schema_tbl)) {
+            uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+            ItemPointerData schema_pmap_tid;
+            np_id_to_tid(v->label_id, pmap_tuples_per_page, &schema_pmap_tid);
+
+            Relation schema_pmap_rel = table_open(graph_cache->annot_schema_phys_map, AccessShareLock);
+            Buffer schema_pmap_buf = ReadBuffer(schema_pmap_rel, ItemPointerGetBlockNumber(&schema_pmap_tid));
+            LockBuffer(schema_pmap_buf, BUFFER_LOCK_SHARE);
+            Page schema_pmap_page = BufferGetPage(schema_pmap_buf);
+            ItemId schema_pmap_lp = PageGetItemId(schema_pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+
+            ItemPointerData latest_schema_tid;
+            ItemPointerSetInvalid(&latest_schema_tid);
+            if (ItemIdIsNormal(schema_pmap_lp)) {
+                NeoPhysMapRecord *pmap_rec = (NeoPhysMapRecord *) PageGetItem(schema_pmap_page, schema_pmap_lp);
+                latest_schema_tid = pmap_rec->v_itemptr; /* Pointer stored in v_itemptr */
+            }
+            UnlockReleaseBuffer(schema_pmap_buf);
+            table_close(schema_pmap_rel, AccessShareLock);
+
+            if (ItemPointerIsValid(&latest_schema_tid)) {
+                Relation schema_rel = table_open(graph_cache->annot_schema_tbl, AccessShareLock);
+                Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
+                LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+                Page schema_page = BufferGetPage(schema_buf);
+                ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
+
+                if (ItemIdIsNormal(schema_lp)) {
+                    NPEntityTupleHeader schema_hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+                    map_array = DatumGetArrayTypePCopy(PointerGetDatum(schema_hdr->serialized_entity));
+                }
+                UnlockReleaseBuffer(schema_buf);
+                table_close(schema_rel, AccessShareLock);
+            }
+        }
+
+        /* Fallback to cache if entity store wasn't initialized yet */
+        if (map_array == NULL) {
+            map_array = label_cache->annotation_map;
+        }
+
+        if (map_array == NULL) {
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("This structural label does not support annotations")));
+        }
+
+        /* B. Calculate dynamic byte size from the loaded schema array */
+        int num_labels = ArrayGetNItems(ARR_NDIM(map_array), ARR_DIMS(map_array));
+        int byte_size = (num_labels + 7) / 8;
+
         /* Allocate a bytea for the bitset */
         bytea *bitset = (bytea *) palloc0(VARHDRSZ + byte_size);
         SET_VARSIZE(bitset, VARHDRSZ + byte_size);
         char *bits = VARDATA(bitset);
 
-        /* Parse inputs and map them to bit positions */
-        if (input_annots != NULL && map_array != NULL) {
-            Datum *input_d, *map_d;
-            bool *input_n, *map_n;
-            int input_count, map_count;
+        /* C. Map inputs to bit positions */
+        Datum *input_d, *map_d;
+        bool *input_n, *map_n;
+        int input_count, map_count;
+        
+        deconstruct_array(input_annots, TEXTOID, -1, false, 'i', &input_d, &input_n, &input_count);
+        deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+        
+        for (int i = 0; i < input_count; i++) {
+            if (input_n[i]) continue;
+            char *in_str = TextDatumGetCString(input_d[i]);
+            int bit_pos = -1;
             
-            deconstruct_array(input_annots, TEXTOID, -1, false, 'i', &input_d, &input_n, &input_count);
-            deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+            for (int j = 0; j < map_count; j++) {
+                if (map_n[j]) continue;
+                if (strcmp(in_str, TextDatumGetCString(map_d[j])) == 0) {
+                    bit_pos = j;
+                    break;
+                }
+            }
             
-            for (int i = 0; i < input_count; i++) {
-                if (input_n[i]) continue;
-                char *in_str = TextDatumGetCString(input_d[i]);
-                int bit_pos = -1;
-                
-                for (int j = 0; j < map_count; j++) {
-                    if (map_n[j]) continue;
-                    if (strcmp(in_str, TextDatumGetCString(map_d[j])) == 0) {
-                        bit_pos = j;
-                        break;
-                    }
-                }
-                
-                if (bit_pos != -1) {
-                    /* Flip the bit for the matched annotation index */
-                    bits[bit_pos / 8] |= (1 << (bit_pos % 8));
-                } else {
-                    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                            errmsg("Annotation label '%s' is not valid for this structural label", in_str)));
-                }
+            if (bit_pos != -1) {
+                /* Flip the bit for the matched annotation index */
+                bits[bit_pos / 8] |= (1 << (bit_pos % 8));
+            } else {
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("Annotation label '%s' is not valid for this structural label", in_str)));
             }
         }
 
-        /* Wrap the bytea bitset in the Entity Store physical tuple layout */
+        /* D. Wrap the bytea bitset in the Entity Store physical tuple layout */
         Size annot_payload_size = VARSIZE(bitset);
         Size annot_total_size = MAXALIGN(SizeOfNPEntityTupleHeader + annot_payload_size);
         
@@ -409,16 +460,25 @@ update_edge(PG_FUNCTION_ARGS)
     np_id_to_tid(edge_id, pmap_tuples_per_page, &phys_map_tid);
 
     /* 2. Read the current phys_map record */
-    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
+
+    /* If the file is completely empty, the vertex definitely doesn't exist */
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map (table empty)")));
+    }
+
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
     LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
-    
     Page pmap_page = BufferGetPage(pmap_buf);
     ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
-    
+
     if (!ItemIdIsNormal(pmap_lp)) {
         UnlockReleaseBuffer(pmap_buf);
-        table_close(pmap_rel, RowExclusiveLock);
-        ereport(ERROR, (errmsg("Edge ID %ld not found in phys_map", edge_id)));
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map")));
     }
 
     NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
@@ -800,18 +860,26 @@ update_vertex(PG_FUNCTION_ARGS)
     ItemPointerData phys_map_tid;
     np_id_to_tid(id, pmap_tuples_per_page, &phys_map_tid);
 
-    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
-    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
-    
-    Page pmap_page = BufferGetPage(pmap_buf);
-    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
-    
-    if (!ItemIdIsNormal(pmap_lp)) {
-        UnlockReleaseBuffer(pmap_buf);
-        table_close(pmap_rel, RowExclusiveLock);
-        ereport(ERROR, (errmsg("Vertex ID %ld not found in phys_map (empty line pointer)", id)));
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
+
+    /* If the file is completely empty, the vertex definitely doesn't exist */
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map (table empty)")));
     }
 
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map")));
+    }
     NeoPhysMapRecord *disk_pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
     NeoPhysMapRecord current_pmap_rec = *disk_pmap_rec; 
     UnlockReleaseBuffer(pmap_buf);
@@ -986,18 +1054,26 @@ delete_vertex(PG_FUNCTION_ARGS)
     np_id_to_tid(vertex_id, pmap_tuples_per_page, &phys_map_tid);
 
     /* Read phys_map to get target TID and Adjacency List Head */
-    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
-    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
 
+    /* If the file is completely empty, the vertex definitely doesn't exist */
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map (table empty)")));
+    }
+
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
     Page pmap_page = BufferGetPage(pmap_buf);
     ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
 
     if (!ItemIdIsNormal(pmap_lp)) {
         UnlockReleaseBuffer(pmap_buf);
-        table_close(pmap_rel, AccessShareLock);
-        ereport(ERROR, (errmsg("Vertex ID %ld not found in phys_map", vertex_id)));
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map")));
     }
-
     NeoPhysMapRecord *disk_pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
     ItemPointerData target_vertex_tid = disk_pmap_rec->v_itemptr;
     
@@ -1173,16 +1249,25 @@ np_internal_delete_edge(int32 graph_id, int32 label_id, int64 edge_id, CommandId
     np_id_to_tid(edge_id, pmap_tuples_per_page, &phys_map_tid);
 
     /* 2. Read the current phys_map record to get target TID */
-    Buffer pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
-    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
 
+    /* If the file is completely empty, the vertex definitely doesn't exist */
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map (table empty)")));
+    }
+
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
     Page pmap_page = BufferGetPage(pmap_buf);
     ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
 
     if (!ItemIdIsNormal(pmap_lp)) {
         UnlockReleaseBuffer(pmap_buf);
-        table_close(pmap_rel, RowExclusiveLock);
-        ereport(ERROR, (errmsg("Edge ID %ld not found in phys_map", edge_id)));
+        table_close(pmap_rel, RowExclusiveLock); /* Use the exact lock level you opened it with */
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Vertex ID not found in phys_map")));
     }
 
     NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);

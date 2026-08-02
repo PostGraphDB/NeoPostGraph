@@ -97,6 +97,7 @@ build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary
     return v;
 }
 
+
 PG_FUNCTION_INFO_V1(vertex_build);
 Datum vertex_build(PG_FUNCTION_ARGS) {
     int64 id = PG_GETARG_INT64(0);
@@ -119,35 +120,21 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
     appendStringInfoString(buffer, "{\"id\": ");
     appendStringInfoString(buffer, DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(v->id))));
 
-// label 
+    // label 
     appendStringInfoString(buffer, ", \"label\": \""); 
     if (v->graph_id != 0 && v->label_id != 0) { 
         const label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id); 
         
-        char *struct_label = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(cache->label)));
         bool has_labels = false;
-        char *label_start = NULL;
         
-        /* 1. Strip the internal root '_' */
-        if (strncmp(struct_label, "_.", 2) == 0) {
-            label_start = struct_label + 2;
-        } else if (strcmp(struct_label, "_") != 0) {
-            label_start = struct_label;
-        }
-
-        /* 2. Convert Ltree Dots to Colons and Append */
-        if (label_start != NULL) {
-            for (char *c = label_start; *c != '\0'; c++) {
-                if (*c == '.') {
-                    *c = ':';
-                }
-            }
-            appendStringInfoString(buffer, label_start);
+        /* 1. Append Pre-Formatted Structural Label from Cache */
+        if (cache && cache->label_string && cache->label_string[0] != '\0') {
+            appendStringInfoString(buffer, cache->label_string);
             has_labels = true;
         }
 
-        /* 3. Fetch and append Annotation Labels directly to the string */
-        if (OidIsValid(cache->annotations_tbl) && cache->annotation_map != NULL) {
+        /* 2. Check if the label supports annotations */
+        if (cache && OidIsValid(cache->annotations_tbl)) {
             
             uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
             ItemPointerData phys_map_tid;
@@ -171,6 +158,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
             UnlockReleaseBuffer(pmap_buf);
             table_close(pmap_rel, AccessShareLock);
 
+            /* If the vertex has an annotation bitset stored on disk */
             if (ItemPointerIsValid(&a_itemptr) && ItemPointerGetOffsetNumber(&a_itemptr) != 0) {
                 Relation annot_rel = table_open(cache->annotations_tbl, AccessShareLock);
                 Buffer annot_buf = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&a_itemptr));
@@ -182,25 +170,106 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
                 if (ItemIdIsNormal(annot_lp)) {
                     NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) PageGetItem(annot_page, annot_lp);
                     
+                    /* Make sure the annotation tuple isn't dead/tombstoned */
                     if (!FullTransactionIdIsValid(annot_hdr->xmax)) {
+                        /* Extract temporal birth timestamps of the bits */
+                        uint64 bitset_xmin = U64FromFullTransactionId(annot_hdr->xmin);
+                        CommandId bitset_cmin = annot_hdr->cmin;
+
                         bytea *bitset = (bytea *) annot_hdr->serialized_entity;
                         char *bits = VARDATA(bitset);
 
-                        Datum *map_d;
-                        bool *map_n;
-                        int map_count;
-                        deconstruct_array(cache->annotation_map, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
-                        
-                        for (int i = 0; i < map_count; i++) {
-                            if (map_n[i]) continue;
+                        /* 3. Temporal Schema Resolution via Graph Cache */
+                        const graph_cache_data *graph_cache = search_graph_id_cache(v->graph_id);
+                        if (graph_cache && OidIsValid(graph_cache->annot_schema_phys_map) && OidIsValid(graph_cache->annot_schema_tbl)) {
+
+                            Relation schema_pmap_rel = table_open(graph_cache->annot_schema_phys_map, AccessShareLock);
                             
-                            /* Check if the bit at index i is flipped */
-                            if ((bits[i / 8] & (1 << (i % 8))) != 0) {
-                                if (has_labels) {
-                                    appendStringInfoString(buffer, ":");  /* <-- CHANGED TO COLON */
+                            ItemPointerData schema_pmap_tid;
+                            /* Use label_id as the ID for the schema phys_map lookup */
+                            np_id_to_tid(v->label_id, pmap_tuples_per_page, &schema_pmap_tid); 
+                            
+                            Buffer schema_pmap_buf = ReadBuffer(schema_pmap_rel, ItemPointerGetBlockNumber(&schema_pmap_tid));
+                            LockBuffer(schema_pmap_buf, BUFFER_LOCK_SHARE);
+                            Page schema_pmap_page = BufferGetPage(schema_pmap_buf);
+                            ItemId schema_pmap_lp = PageGetItemId(schema_pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+                            
+                            ItemPointerData schema_itemptr;
+                            ItemPointerSetInvalid(&schema_itemptr);
+                            if (ItemIdIsNormal(schema_pmap_lp)) {
+                                NeoPhysMapRecord *schema_pmap_rec = (NeoPhysMapRecord *) PageGetItem(schema_pmap_page, schema_pmap_lp);
+                                schema_itemptr = schema_pmap_rec->v_itemptr; /* Pointer stored in v_itemptr */
+                            }
+                            UnlockReleaseBuffer(schema_pmap_buf);
+                            table_close(schema_pmap_rel, AccessShareLock);
+                            
+                            bool decoded = false;
+
+                            if (ItemPointerIsValid(&schema_itemptr)) {
+                                Relation schema_rel = table_open(graph_cache->annot_schema_tbl, AccessShareLock);
+                                
+                                /* Walk backwards through Entity Store */
+                                while (ItemPointerIsValid(&schema_itemptr)) {
+                                    Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&schema_itemptr));
+                                    LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+                                    Page schema_page = BufferGetPage(schema_buf);
+                                    ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&schema_itemptr));
+                                    
+                                    if (ItemIdIsNormal(schema_lp)) {
+                                        NPEntityTupleHeader schema_hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+                                        uint64 schema_xmin = U64FromFullTransactionId(schema_hdr->xmin);
+                                        
+                                        /* Temporal bounds check: is schema older than or equal to bitset creation? */
+                                        if (schema_xmin < bitset_xmin || (schema_xmin == bitset_xmin && schema_hdr->cmin <= bitset_cmin)) {
+                                            ArrayType *map_array = DatumGetArrayTypeP(PointerGetDatum(schema_hdr->serialized_entity));
+                                            
+                                            Datum *map_d;
+                                            bool *map_n;
+                                            int map_count;
+                                            deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+                                            
+                                            for (int i = 0; i < map_count; i++) {
+                                                if (map_n[i]) continue;
+                                                if ((bits[i / 8] & (1 << (i % 8))) != 0) {
+                                                    if (has_labels) appendStringInfoString(buffer, ":");
+                                                    appendStringInfoString(buffer, TextDatumGetCString(map_d[i]));
+                                                    has_labels = true;
+                                                }
+                                            }
+                                            
+                                            decoded = true;
+                                            UnlockReleaseBuffer(schema_buf);
+                                            break;
+                                        } else {
+                                            /* Schema is newer than this bitset, follow backwards chain */
+                                            schema_itemptr = schema_hdr->prev_itemptr;
+                                        }
+                                    } else {
+                                        ItemPointerSetInvalid(&schema_itemptr);
+                                    }
+                                    UnlockReleaseBuffer(schema_buf);
                                 }
-                                appendStringInfoString(buffer, TextDatumGetCString(map_d[i]));
-                                has_labels = true;
+                                table_close(schema_rel, AccessShareLock);
+                            }
+
+                            /* 
+                            * FALLBACK: If the bitset was created BEFORE the first record in the 
+                            * schema Entity Store, decode against the base label_cache->annotation_map!
+                            */
+                            if (!decoded && cache->annotation_map != NULL) {
+                                Datum *map_d;
+                                bool *map_n;
+                                int map_count;
+                                deconstruct_array(cache->annotation_map, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+                                
+                                for (int i = 0; i < map_count; i++) {
+                                    if (map_n[i]) continue;
+                                    if ((bits[i / 8] & (1 << (i % 8))) != 0) {
+                                        if (has_labels) appendStringInfoString(buffer, ":");
+                                        appendStringInfoString(buffer, TextDatumGetCString(map_d[i]));
+                                        has_labels = true;
+                                    }
+                                }
                             }
                         }
                     }

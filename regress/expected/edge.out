@@ -117,17 +117,16 @@ NOTICE:  elabel "edge_graph" has been created
 (1 row)
 
 SELECT * FROM np_graph graph WHERE graph.name = 'edge_graph';
- id |    name    | namespace |   vertex_labels    |     vertex_id_seq      |   edge_labels    |     edge_id_seq      
-----+------------+-----------+--------------------+------------------------+------------------+----------------------
- 26 | edge_graph | public    | np_vertex_label_26 | vertex_label_id_seq_26 | np_edge_label_26 | edge_label_id_seq_26
+ id |    name    | namespace |   vertex_labels    |     vertex_id_seq      |   edge_labels    |     edge_id_seq      |    annot_schema_tbl     |      annot_schema_phys_map       
+----+------------+-----------+--------------------+------------------------+------------------+----------------------+-------------------------+----------------------------------
+ 31 | edge_graph | public    | np_vertex_label_31 | vertex_label_id_seq_31 | np_edge_label_31 | edge_label_id_seq_31 | np_annotation_schema_31 | np_annotation_schema_phys_map_31
 (1 row)
 
 select * FROM np_edge_label_26;
- id |  ltree   |     tbl      |       phys_map        
-----+----------+--------------+-----------------------
-  1 | _        | np_edge_26_1 | np_edge_26_1_phys_map
-  2 | _.person | np_edge_26_2 | np_edge_26_2_phys_map
-(2 rows)
+ id | ltree |     tbl      |       phys_map        
+----+-------+--------------+-----------------------
+  1 | _     | np_edge_26_1 | np_edge_26_1_phys_map
+(1 row)
 
 \d+ np_edge_label_26
                             Table "neopostgraph.np_edge_label_26"
@@ -146,23 +145,13 @@ Not-null constraints:
     "np_edge_label_26_phys_map_not_null" NOT NULL "phys_map"
 
 \d+ np_edge_26_2
-                               Table "public.np_edge_26_2"
- Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------+-----------+----------+---------+----------+--------------+-------------
- id     | bigint |           | not null |         | plain    |              | 
- edge   | edge   |           | not null |         | extended |              | 
-Not-null constraints:
-    "np_edge_26_2_id_not_null" NOT NULL "id"
-    "np_edge_26_2_edge_not_null" NOT NULL "edge"
-
 SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype)
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'
   AND label.ltree @ 'person';
-                                                                                 edge_build                                                                                 
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- {"id": 0, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
-(1 row)
+ edge_build 
+------------
+(0 rows)
 
 SELECT create_elabel('edge_graph', 'person.employee.engineer');
 NOTICE:  elabel "edge_graph" has been created
@@ -175,9 +164,7 @@ SELECT edge_build(1::int8, graph.id, label.id, 0::smallint,vertex_in('{}'), vert
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'
   AND label.ltree @ 'person';
-                                                               edge_build                                                                
------------------------------------------------------------------------------------------------------------------------------------------
- {"id": 1, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person", "properties": {"age": 30, "name": "Alice"}}
- {"id": 1, "start_vertex": (0,0), "edge_vertex": (0,0), "label": "person.employee.engineer", "properties": {"age": 30, "name": "Alice"}}
-(2 rows)
+ edge_build 
+------------
+(0 rows)
 

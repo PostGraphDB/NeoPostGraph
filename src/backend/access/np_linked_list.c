@@ -222,7 +222,6 @@ np_linked_list_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Com
     rec.prev_itemptr = *p_ptr;
 
     /* 4. Write the raw C struct directly to a Postgres 8KB buffer */
-    /* (Using the np_write_record_to_page function we defined earlier) */
     np_write_record_to_page(relation, (char *) &rec, sizeof(NeoLinkedListRecord), &new_tid);
 
     /* 5. Update the slot with the newly assigned physical address */

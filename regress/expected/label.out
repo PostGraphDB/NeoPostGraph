@@ -28,38 +28,59 @@ NOTICE:  graph "label_graph" has been created
 
 -- Standard labels
 SELECT NeoPostGraph.create_vlabel('label_graph', 'person');
-NOTICE:  vlabel "label_graph" has been created
+NOTICE:  vlabel "person" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
 SELECT NeoPostGraph.create_vlabel('label_graph', 'software');
-NOTICE:  vlabel "label_graph" has been created
+NOTICE:  vlabel "software" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
 
--- Hierarchical ltree labels (assuming create_vlabel handles ltree-style strings)
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee');
-NOTICE:  vlabel "label_graph" has been created
+-- Creating Label Trees
+SELECT NeoPostGraph.create_vlabel('label_graph', 'employee');
+NOTICE:  vlabel "employee" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.employee.engineer');
-NOTICE:  vlabel "label_graph" has been created
+SELECT NeoPostGraph.merge_vlabels('label_graph', 2, 4);
+NOTICE:  Merged vlabel "_.person.employee" has been created
+ merge_vlabels 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('label_graph', 'engineer');
+NOTICE:  vlabel "engineer" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
-SELECT NeoPostGraph.create_vlabel('label_graph', 'person.contractor');
-NOTICE:  vlabel "label_graph" has been created
+SELECT NeoPostGraph.merge_vlabels('label_graph', 5, 6);
+NOTICE:  Merged vlabel "_.person.employee.engineer" has been created
+ merge_vlabels 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_vlabel('label_graph', 'contractor');
+NOTICE:  vlabel "contractor" has been created
  create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.merge_vlabels('label_graph', 2, 8);
+NOTICE:  Merged vlabel "_.person.contractor" has been created
+ merge_vlabels 
 ---------------
  
 (1 row)
@@ -75,14 +96,14 @@ NOTICE:  graph "edge_case_graph" has been created
 
 -- Testing the "_" naming logic
 SELECT NeoPostGraph.create_vlabel('edge_case_graph', '_internal');
-NOTICE:  vlabel "edge_case_graph" has been created
+NOTICE:  vlabel "_internal" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
 SELECT NeoPostGraph.create_vlabel('edge_case_graph', 'test_label_123');
-NOTICE:  vlabel "edge_case_graph" has been created
+NOTICE:  vlabel "test_label_123" has been created
  create_vlabel 
 ---------------
  
@@ -91,7 +112,7 @@ NOTICE:  vlabel "edge_case_graph" has been created
 
 -- Unicode/Multi-byte labels (to match your previous tests)
 SELECT NeoPostGraph.create_vlabel('edge_case_graph', '인간'); 
-NOTICE:  vlabel "edge_case_graph" has been created
+NOTICE:  vlabel "인간" has been created
  create_vlabel 
 ---------------
  
@@ -107,28 +128,28 @@ NOTICE:  graph "match_test_graph" has been created
 
 
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user');
-NOTICE:  vlabel "match_test_graph" has been created
+NOTICE:  vlabel "user" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_admin');
-NOTICE:  vlabel "match_test_graph" has been created
+NOTICE:  vlabel "user_admin" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user_profile');
-NOTICE:  vlabel "match_test_graph" has been created
+NOTICE:  vlabel "user_profile" has been created
  create_vlabel 
 ---------------
  
 (1 row)
 
-SELECT NeoPostGraph.create_vlabel('match_test_graph', 'users'); -- Plural vs Singular
-NOTICE:  vlabel "match_test_graph" has been created
+SELECT NeoPostGraph.create_vlabel('match_test_graph', 'users');
+NOTICE:  vlabel "users" has been created
  create_vlabel 
 ---------------
  
@@ -172,14 +193,15 @@ SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['employee']::text[]);
 ----------------
               4
               5
-(2 rows)
+              7
+(3 rows)
 
 
 -- 2. Test multi-label AND logic
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person', 'engineer']::text[]);
  get_vlabel_ids 
 ----------------
-              5
+              7
 (1 row)
 
 
@@ -188,9 +210,9 @@ SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person']::text[]);
  get_vlabel_ids 
 ----------------
               2
-              4
               5
-              6
+              7
+              9
 (4 rows)
 
 
@@ -252,8 +274,9 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'software
  get_or_vlabel_ids 
 -------------------
                  3
-                 5
-(2 rows)
+                 6
+                 7
+(3 rows)
 
 
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['employee', 'software']::text[]);
@@ -262,23 +285,27 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['employee', 'software
                  3
                  4
                  5
-(3 rows)
+                 7
+(4 rows)
 
 
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'contractor']::text[]);
  get_or_vlabel_ids 
 -------------------
-                 5
                  6
-(2 rows)
+                 7
+                 8
+                 9
+(4 rows)
 
 
 -- OR logic check with non-existent sibling
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor']::text[]);
  get_or_vlabel_ids 
 -------------------
-                 5
-(1 row)
+                 6
+                 7
+(2 rows)
 
 
 SELECT * FROM NeoPostGraph.np_vertex_label;

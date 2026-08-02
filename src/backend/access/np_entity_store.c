@@ -27,6 +27,7 @@
 
 #include "access/np_entity_store.h"
 
+#include "access/np_phys_map.h"
 struct ReadStream;
 
 static const TupleTableSlotOps *
@@ -197,7 +198,7 @@ static TM_Result np_entity_store_tuple_delete(Relation rel, ItemPointer tid, Com
 }
 
 #include "access/generic_xlog.h" /* Required for WAL logging the old page */
-
+/*
 static void 
 np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
 {
@@ -248,7 +249,7 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
     ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
     UnlockReleaseBuffer(buffer);
 }
-
+*/
 static TM_Result
 np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot, 
                              CommandId cid, Snapshot snapshot, Snapshot crosscheck, 

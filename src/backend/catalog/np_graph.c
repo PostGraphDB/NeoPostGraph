@@ -35,7 +35,7 @@
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq);
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq, Oid schema_tbl, Oid schema_pmap);
 
 PG_FUNCTION_INFO_V1(create_graph);
 Datum create_graph(PG_FUNCTION_ARGS)
@@ -88,9 +88,12 @@ Datum create_graph(PG_FUNCTION_ARGS)
     create_metadata_gist_index(edge_meta_tbl);
     create_default_elabel(graph_id, edge_id_seq, namespace);
 
+    Oid schema_tbl = create_annotation_schema_table(graph_id, namespace);
+    Oid schema_pmap = create_annotation_schema_phys_map_table(graph_id, namespace);
+
     create_label_catalog_table(graph_id);
 
-    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq);
+insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq, schema_tbl, schema_pmap);
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 
@@ -98,20 +101,22 @@ Datum create_graph(PG_FUNCTION_ARGS)
 }
 
 // INSERT INTO postgraph.np_graph VALUES (id, graph_name, namespace, vertex_id_seq)
-void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq)
+void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq, Oid schema_tbl, Oid schema_pmap)
 {
     Relation rel = table_open(np_graph_relation_id(), RowExclusiveLock);
 
-    Datum values[7] = {
+    Datum values[9] = {
         Int32GetDatum(graph_id),
         NameGetDatum(graph_name),
         ObjectIdGetDatum(namespace),
         ObjectIdGetDatum(vertex_label),
         ObjectIdGetDatum(vertex_id_seq),
         ObjectIdGetDatum(edge_label),
-        ObjectIdGetDatum(edge_id_seq)
+        ObjectIdGetDatum(edge_id_seq),
+        ObjectIdGetDatum(schema_tbl),
+        ObjectIdGetDatum(schema_pmap)
     };
-    bool nulls[7] = { false, false, false, false, false, false };
+    bool nulls[9] = { false, false, false, false, false, false, false, false };
 
     CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 

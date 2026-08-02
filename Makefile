@@ -44,7 +44,8 @@ REGRESS = graph \
           gtype \
           dictionary \
           vertex \
-		  edge \
+          annotation_rollback \
+	   edge \
           neopostgraph
 
 srcdir=`pwd`
