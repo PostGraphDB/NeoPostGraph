@@ -83,7 +83,7 @@ SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", 
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
-*/
+
 --
 -- Vertex with a Dictionary
 --
@@ -128,22 +128,22 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 
 SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
 
 \dt public
-
-select insert_vertex(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
-select insert_vertex(vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
+RESET neopostgraph.show_dictionary_keys;
+*/
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
 
 select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      1::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
   );
 
 
-RESET neopostgraph.show_dictionary_keys;
 
 \d+ np_edge_21_1
 
@@ -154,7 +154,7 @@ select insert_edge(
   vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      2::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -177,12 +177,12 @@ select * From np_vertex_1_1_1_linked_list;
 SELECT * FROM public.np_edge_21_1;
 
 SELECT insert_vertex(
-  vertex_build(1, 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype),
    ARRAY['EMPLOYEED']
 );
 
 SELECT insert_vertex(
-  vertex_build(2, 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype),
+  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype),
    ARRAY['FREE']
 );
 select * from np_vertex_21_2;
@@ -191,7 +191,7 @@ select * from np_vertex_21_2_annotations;
 
 
 SELECT insert_vertex(
-  vertex_build(1, 21, 6, 0::smallint, '{"name": "Charlie", "age": 36}'::gtype),
+  vertex_build(nextval('np_vertex_id_seq_21_6'), 21, 6, 0::smallint, '{"name": "Charlie", "age": 36}'::gtype),
    ARRAY['FREE']
 );
 
@@ -205,7 +205,7 @@ select insert_edge(
   vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      3::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -218,7 +218,7 @@ select insert_edge(
   vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      4::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -260,11 +260,11 @@ select ctid, * from np_vertex_21_2;
 
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
 SELECT insert_vertex(
-  vertex_build(1, 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
+  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
 );
 
 SELECT insert_vertex(
-  vertex_build(2, 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
+  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
 );
 select * from np_vertex_21_1_phys_map;
 
@@ -272,7 +272,7 @@ select insert_edge(
   vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      5::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -282,7 +282,7 @@ select insert_edge(
   vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
   vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
   edge_build(
-      6::int8, 21, 1, 0::smallint, 
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
       vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
       vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
       '{}'::gtype)
@@ -342,7 +342,7 @@ select * FROM np_vertex_label_21;
 SELECT add_annotation_label('vertex_graph', 'person', 'Active');
 
 SELECT insert_vertex(
-  vertex_build(3, 21, 2, 0::smallint, '{"name": "David", "age": 27}'::gtype),
+  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "David", "age": 27}'::gtype),
    ARRAY['Active']
 );
 
@@ -372,3 +372,21 @@ select * from np_vertex_21_2_annotations;
 select * from np_vertex_21_4_annotations;
 select * from np_vertex_21_5_annotations;
 select * from np_vertex_21_6_annotations;
+
+SELECT * FROM public.np_vertex_21_1;
+select * from np_vertex_21_2_phys_map;
+select * From np_vertex_21_2_1_linked_list;
+select * From np_vertex_21_2_2_linked_list;
+SELECT * FROM np_vertex_21_2_arraylist;
+
+select set_vertex_label(2, 2, 21, 'missing_label');
+select * FROM np_vertex_21_10;
+select * FROM np_vertex_21_10_phys_map;
+select * FROM np_vertex_21_10_linked_list_meta;
+select * from np_vertex_21_10_1_linked_list;
+select * FROM np_vertex_21_10_linked_list_seq;
+select * FROM np_vertex_21_10_arraylist;
+select * FROM np_vertex_21_10_annotations;
+
+
+select * FROM np_vertex_label_21;

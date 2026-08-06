@@ -35,7 +35,7 @@
 #include "utils/relcache.h"
 #include "utils/syscache.h"
 #include "utils/array.h"
-
+#include "utils/snapmgr.h"
 
 #include "ltree.h"
 
@@ -703,7 +703,7 @@ fill_vertex_label_cache_data(label_cache_data *cache_data,
     cache_data->annotations_tbl = DatumGetObjectId(heap_getattr(tuple, 8, tuple_desc, &is_null));
     if (is_null) cache_data->annotations_tbl = InvalidOid;
 
-    /* Extract and Copy Annotation Map Array (Col 9) */
+/* Extract and Copy Annotation Map Array (Col 9) */
     Datum map_datum = heap_getattr(tuple, 9, tuple_desc, &is_null);
     if (is_null) {
         cache_data->annotation_map = NULL;
@@ -715,6 +715,8 @@ fill_vertex_label_cache_data(label_cache_data *cache_data,
         int num_labels = ArrayGetNItems(ARR_NDIM(cache_data->annotation_map), ARR_DIMS(cache_data->annotation_map));
         cache_data->annotation_byte_size = (num_labels + 7) / 8;
     }
+
+    MemoryContextSwitchTo(oldcxt);
 }
 
 static void

@@ -21,6 +21,8 @@
 #include "utils/guc.h"
 #include "utils/elog.h"
 
+#include "postgraph.h"
+
 #include "utils/np_cache.h"
 #include "utils/vertex.h"
 #include "access/np_phys_map.h"
@@ -35,7 +37,7 @@ void _PG_init(void)
     DefineCustomBoolVariable(
         "neopostgraph.show_dictionary_keys",
         "Enable/disable showing dictionary keys in vertex",
-        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable", // long description (can be NULL)
+        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable",
          &show_dictionary_keys,
         true,
         PGC_USERSET,
@@ -47,7 +49,7 @@ void _PG_init(void)
     DefineCustomBoolVariable(
         "neopostgraph.show_dictionary_nulls",
         "Enable/disable showing dictionary keys in vertex",
-        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable", // long description (can be NULL)
+        "The Vertex Output routine will show the underlying array with the dictionary key values added when enable", 
          &show_dictionary_nulls,
         false,
         PGC_USERSET,
@@ -55,6 +57,17 @@ void _PG_init(void)
         NULL,
         assign_show_dictionary_nulls,
         NULL
+    );
+    DefineCustomEnumVariable(
+        "neopostgraph.annotation_migration_mode",
+        "Behavior when a vertex's annotations do not exist on its new structural label.",
+        "Valid values are 'strict' (error), 'drop' (discard missing), or 'auto' (add to new label).",
+        &np_annotation_migration_mode,
+        ANNOT_MIGRATION_STRICT,
+        annotation_migration_options,
+        PGC_USERSET,
+        0,
+        NULL, NULL, NULL
     );
     MarkGUCPrefixReserved("neopostgraph");
 

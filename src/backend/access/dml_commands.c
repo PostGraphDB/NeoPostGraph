@@ -33,6 +33,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/fmgrprotos.h"
 #include "utils/rel.h"
 #include "varatt.h"
 
@@ -1019,11 +1020,7 @@ np_delete_edge_from_adj_list(int32 graph_id, int64 vertex_id, int32 vertex_label
     }
 }
 
-#include "access/generic_xlog.h"
-#include "utils/fmgrprotos.h"
 
-#include "access/generic_xlog.h"
-#include "utils/fmgrprotos.h"
 
 typedef struct {
     int64 edge_id;
