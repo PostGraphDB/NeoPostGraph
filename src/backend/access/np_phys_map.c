@@ -306,6 +306,109 @@ np_physmap_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Command
     ItemPointerCopy(&new_tid, &slot->tts_tid);
 }
 
+/*
+ * np_calculate_tuples_per_page
+ *
+ * Calculates the exact number of fixed-width tuples that fit on a standard 
+ * 8KB PostgreSQL page. This MUST match the behavior of RelationPutHeapTuple.
+ */
+uint32
+np_calculate_tuples_per_page(Size payload_size)
+{
+    /* Standard MVCC Header (usually 24 bytes aligned) + Payload */
+    Size tuple_size = MAXALIGN(SizeofHeapTupleHeader + payload_size);
+    
+    /* Each tuple requires a 4-byte Line Pointer */
+    Size space_per_item = tuple_size + sizeof(ItemIdData);
+    
+    /* Available space = 8192 - 24 byte page header */
+    Size available_space = BLCKSZ - SizeOfPageHeaderData;
+    
+    return available_space / space_per_item;
+}
+
+void
+np_id_to_tid(uint64 id, uint32 tuples_per_page, ItemPointerData *tid)
+{
+    uint64 zero_based_id;
+
+    Assert(id > 0);
+    zero_based_id = id - 1;
+
+    BlockNumber block  = (BlockNumber)(zero_based_id / tuples_per_page);
+    OffsetNumber offset = (OffsetNumber)((zero_based_id % tuples_per_page) + 1);
+
+    ItemPointerSet(tid, block, offset);
+}
+
+/*
+ * update_vertex_phys_map
+ *
+ * Uses positional math (np_id_to_tid) to directly locate the phys_map row
+ * for a vertex and performs an in-place update of its edge pointer.
+ */
+void
+update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_oid, ItemPointer new_edge_tid, CommandId cid)
+{
+    Size payload_size = sizeof(NeoPhysMapRecord);
+    uint32 tuples_per_page = np_calculate_tuples_per_page(payload_size);
+
+    ItemPointerData target_tid;
+    np_id_to_tid(vertex_id, tuples_per_page, &target_tid);
+
+    Buffer buffer = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&target_tid));
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    Page page = BufferGetPage(buffer);
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
+
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: phys_map positional update failed");
+    }
+
+    GenericXLogState *state = GenericXLogStart(pmap_rel);
+    
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&target_tid));
+    NeoPhysMapRecord *disk_rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+    
+    disk_rec->e_tbl_id = new_edge_table_oid;
+    disk_rec->e_itemptr = *new_edge_tid;
+
+    GenericXLogFinish(state);
+
+    UnlockReleaseBuffer(buffer);
+}
+
+void
+np_overwrite_edge_physmap_in_page(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data)
+{
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(rel);
+    Page page = GenericXLogRegisterBuffer(state, buffer, 0);
+    
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+
+    /* If the page is completely new, you might need PageAddItem logic here, 
+       but assuming the file is pre-extended or you handle that in np_id_to_tid: */
+    if (!ItemIdIsNormal(lp)) {
+        GenericXLogAbort(state);
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: attempted to update invalid edge phys_map tuple");
+    }
+
+    NeoEdgePhysMapRecord *disk_rec = (NeoEdgePhysMapRecord *) PageGetItem(page, lp);
+
+    /* Pure overwrite */
+    memcpy(disk_rec, new_data, sizeof(NeoEdgePhysMapRecord));
+
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(buffer);
+}
+
 static TM_Result
 np_physmap_tableam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
                                 CommandId cid, Snapshot snapshot, Snapshot crosscheck,

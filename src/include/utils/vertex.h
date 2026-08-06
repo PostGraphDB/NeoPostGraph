@@ -26,7 +26,7 @@
 
 
 
-typedef struct {
+typedef struct pg_attribute_packed() {
     int32 vl_len_;
     int64 id;
     int32 graph_id;

@@ -28,6 +28,10 @@
 #include "storage/bufpage.h"
 #include "storage/itemptr.h"
 
+#include "utils/array.h"
+#include "utils/edge.h"
+#include "utils/vertex.h"
+
 extern const TableAmRoutine np_linked_list_methods;
 
 
@@ -69,5 +73,9 @@ typedef struct NeoTupleTableSlot
 } NeoTupleTableSlot;
 
 TM_Result np_linked_list_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid);
+
+void np_internal_delete_edge(int32 graph_id, int32 label_id, int64 edge_id, CommandId cid, FullTransactionId current_fxid);
+
+
 
 #endif // NP_LINKED_LIST_AM_H

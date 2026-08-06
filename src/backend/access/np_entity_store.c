@@ -198,13 +198,110 @@ static TM_Result np_entity_store_tuple_delete(Relation rel, ItemPointer tid, Com
 }
 
 #include "access/generic_xlog.h" /* Required for WAL logging the old page */
-/*
-static void 
+
+
+
+void np_update_inplace(Relation relation, const ItemPointerData *otid, HeapTuple newtup, CommandId cid) {
+    TM_Result result;
+    TransactionId xid = GetCurrentTransactionId();
+    ItemId lp;
+    HeapTupleData oldtup;
+    Page page;
+    BlockNumber block;
+    Buffer buffer;
+
+    Assert(ItemPointerIsValid(otid));
+    Assert(HeapTupleHeaderGetNatts(newtup->t_data) <= RelationGetNumberOfAttributes(relation));
+
+    if (IsInParallelMode())
+        ereport(ERROR, (errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+             errmsg("cannot update tuples during a parallel operation")));
+
+    block = ItemPointerGetBlockNumber(otid);
+    buffer = ReadBuffer(relation, block);
+    page = BufferGetPage(buffer);
+
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(otid));
+
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        ereport(ERROR, (errcode(ERRCODE_DATA_CORRUPTED),
+             errmsg("NeoPostGraph: Positional mapping failed. Line pointer is not normal at TID (%u, %u)",
+                ItemPointerGetBlockNumber(otid), ItemPointerGetOffsetNumber(otid))));
+    }
+
+    oldtup.t_tableOid = RelationGetRelid(relation);
+    oldtup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
+    oldtup.t_len = ItemIdGetLength(lp);
+    oldtup.t_self = *otid;
+    newtup->t_tableOid = RelationGetRelid(relation);
+
+    result = HeapTupleSatisfiesUpdate(&oldtup, cid, buffer);
+
+    if (result == TM_SelfModified)
+        result = TM_Ok;
+
+    if (result != TM_Ok) {
+        UnlockReleaseBuffer(buffer);
+        ereport(ERROR, (errcode(ERRCODE_DATA_CORRUPTED),
+             errmsg("NeoPostGraph: Unexpected visibility failure (%d) during in-place overwrite.", result)));
+    }
+
+    if (newtup->t_len != oldtup.t_len) {
+        UnlockReleaseBuffer(buffer);
+        ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("NeoPostGraph: In-place update requires identical raw tuple sizes.%i %i",newtup->t_len, oldtup.t_len )));
+    }
+
+    START_CRIT_SECTION();
+
+    uint8 header_size = oldtup.t_data->t_hoff;
+    Size payload_size = oldtup.t_len - header_size;
+
+    memcpy((char *) oldtup.t_data + header_size, 
+           (char *) newtup->t_data + newtup->t_data->t_hoff, 
+           payload_size);
+
+    oldtup.t_data->t_ctid = oldtup.t_self;
+
+    MarkBufferDirty(buffer);
+
+    if (RelationNeedsWAL(relation)) {
+        xl_heap_inplace xlrec;
+        XLogRecPtr recptr;
+
+        XLogBeginInsert();
+        XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+
+        xlrec.offnum = ItemPointerGetOffsetNumber(&oldtup.t_self);
+        XLogRegisterData((char *) &xlrec, sizeof(xl_heap_inplace));
+        XLogRegisterBufData(0, (char *) newtup->t_data, newtup->t_len);
+
+        recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_INPLACE);
+        PageSetLSN(page, recptr);
+    }
+
+    END_CRIT_SECTION();
+
+    LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+    ReleaseBuffer(buffer);
+}
+
+
+void 
 np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
 {
-    BlockNumber blockNum = RelationGetNumberOfBlocks(rel);
-
     Buffer buffer;
+    Page page;
+    OffsetNumber offnum;
+    BlockNumber blockNum;
+    GenericXLogState *state;
+    int flags = 0;
+
+    blockNum = RelationGetNumberOfBlocks(rel);
+    
     if (blockNum == 0) {
         buffer = ReadBuffer(rel, P_NEW);
     } else {
@@ -212,7 +309,7 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
     }
 
     LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    Page page = BufferGetPage(buffer);
+    page = BufferGetPage(buffer);
 
     Size space_needed = MAXALIGN(data_size) + sizeof(ItemIdData);
     if (!PageIsNew(page) && PageGetFreeSpace(page) < space_needed) {
@@ -223,9 +320,8 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
         page = BufferGetPage(buffer);
     }
 
-    GenericXLogState *state = GenericXLogStart(rel);
+    state = GenericXLogStart(rel);
 
-    int flags = 0;
     if (PageIsNew(page)) {
         flags = GENERIC_XLOG_FULL_IMAGE;
     }
@@ -236,12 +332,12 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
         PageInit(page, BufferGetPageSize(buffer), 0);
     }
 
-    OffsetNumber offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
+    offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
 
     if (offnum == InvalidOffsetNumber) {
         GenericXLogAbort(state);
         UnlockReleaseBuffer(buffer);
-        elog(ERROR, "NeoPostGraph: Failed to add tuple to page despite free space check");
+        elog(ERROR, "NeoPostGraph: Failed to add tuple to new page despite free space check");
     }
 
     GenericXLogFinish(state);
@@ -249,7 +345,7 @@ np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer ou
     ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
     UnlockReleaseBuffer(buffer);
 }
-*/
+
 static TM_Result
 np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot, 
                              CommandId cid, Snapshot snapshot, Snapshot crosscheck, 

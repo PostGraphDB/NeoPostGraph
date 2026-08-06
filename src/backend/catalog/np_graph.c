@@ -33,6 +33,7 @@
 
 #include "catalog/np_graph.h"
 #include "catalog/np_label.h"
+#include "commands/label_commands.h"
 #include "utils/np_cache.h"
 
 void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid vertex_label, Oid vertex_id_seq, Oid edge_label, Oid edge_id_seq, Oid schema_tbl, Oid schema_pmap);
@@ -72,28 +73,18 @@ Datum create_graph(PG_FUNCTION_ARGS)
 
     int graph_id = DatumGetInt32(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(get_relname_relid("np_graph_id_seq", np_namespace_id()))));
 
-    // vertex labels setup
-    Oid vertex_id_seq = create_label_sequence(psprintf("vertex_label_id_seq_%d",graph_id), get_namespace_name(namespace));
-    char *vertex_meta_tbl = psprintf("np_vertex_label_%d", graph_id);
-    Oid vertex_label = create_vertex_label_metadata_table(psprintf(vertex_meta_tbl));
-    create_metadata_btree_index(vertex_meta_tbl);
-    create_metadata_gist_index(vertex_meta_tbl);
-    create_default_vlabel(graph_id, vertex_id_seq, namespace);
+    Oid vertex_id_seq, vertex_label;
+    setup_vertex_label_catalog(graph_id, namespace, &vertex_id_seq, &vertex_label);
 
-    // edge labels setup
-    Oid edge_id_seq = create_label_sequence(psprintf("edge_label_id_seq_%d", graph_id), get_namespace_name(namespace));
-    char *edge_meta_tbl = psprintf("np_edge_label_%d", graph_id);
-    Oid edge_label = create_label_metadata_table(edge_meta_tbl);
-    create_metadata_btree_index(edge_meta_tbl);
-    create_metadata_gist_index(edge_meta_tbl);
-    create_default_elabel(graph_id, edge_id_seq, namespace);
+    Oid edge_id_seq, edge_label;
+    setup_edge_label_catalog(graph_id, namespace, &edge_id_seq, &edge_label);
 
     Oid schema_tbl = create_annotation_schema_table(graph_id, namespace);
     Oid schema_pmap = create_annotation_schema_phys_map_table(graph_id, namespace);
 
     create_label_catalog_table(graph_id);
 
-insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq, schema_tbl, schema_pmap);
+    insert_graph(PG_GETARG_NAME(0), namespace, graph_id, vertex_label, vertex_id_seq, edge_label, edge_id_seq, schema_tbl, schema_pmap);
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been created", graph_name)));
 

@@ -134,14 +134,16 @@ select * FROM np_edge_label_26;
 ----------+----------+-----------+----------+---------+----------+--------------+-------------
  id       | integer  |           | not null |         | plain    |              | 
  ltree    | ltree    |           | not null |         | extended |              | 
- tbl      | regclass |           |          |         | plain    |              | 
+ tbl      | regclass |           | not null |         | plain    |              | 
  phys_map | regclass |           | not null |         | plain    |              | 
 Indexes:
     "np_edge_label_26_btree_idx" PRIMARY KEY, btree (id)
     "np_edge_label_26_gist_idx" gist (ltree)
+    "np_edge_label_26_ltree_key" UNIQUE CONSTRAINT, btree (ltree)
 Not-null constraints:
     "np_edge_label_26_id_not_null" NOT NULL "id"
     "np_edge_label_26_ltree_not_null" NOT NULL "ltree"
+    "np_edge_label_26_tbl_not_null" NOT NULL "tbl"
     "np_edge_label_26_phys_map_not_null" NOT NULL "phys_map"
 
 \d+ np_edge_26_2

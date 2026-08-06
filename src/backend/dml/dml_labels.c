@@ -1,0 +1,643 @@
+/*
+ * PostGraph
+ * Copyright (C) 2026 by PostGraph
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+#include "postgres.h"
+
+#include "access/genam.h"
+#include "access/heapam.h"
+#include "access/htup.h"
+#include "access/htup_details.h"
+#include "access/skey.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_type.h"
+#include "commands/sequence.h"
+#include "funcapi.h"
+#include "fmgr.h"
+#include "lib/stringinfo.h"
+#include "nodes/execnodes.h"
+#include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
+#include "storage/lockdefs.h"
+#include "utils/array.h"
+#include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/rel.h"
+#include "utils/relcache.h"
+#include "utils/syscache.h"
+#include "tcop/utility.h"
+#include "parser/parse_type.h"
+#include "storage/lmgr.h"
+#include "access/generic_xlog.h"
+#include "utils/array.h"
+#include "access/skey.h"
+#include "utils/fmgroids.h"
+#include "commands/sequence.h"
+#include "nodes/parsenodes.h"
+#include "nodes/makefuncs.h"
+#include "miscadmin.h"
+#include "utils/inval.h"
+
+#include "utils/datum.h"
+
+#include "ltree.h"
+
+#include "catalog/np_label.h"
+#include "commands/label_commands.h"
+#include "utils/np_cache.h"
+#include "utils/adj_list.h"
+#include "access/np_phys_map.h"
+#include "access/np_linked_list.h"
+#include "utils/dictionary.h"
+#include "utils/edge.h"
+#include "utils/vertex.h"
+#include "dml/dml_insert.h"
+
+#include "access/np_entity_store.h"
+#include "access/np_phys_map.h"
+
+
+extern Datum ltree_in(PG_FUNCTION_ARGS);
+extern Datum ltree_addltree(PG_FUNCTION_ARGS);
+extern Datum ltxtq_in(PG_FUNCTION_ARGS);
+extern Datum ltree_out(PG_FUNCTION_ARGS);
+extern Datum ltree_isparent(PG_FUNCTION_ARGS);
+extern Datum ltree_cmp(PG_FUNCTION_ARGS);
+
+
+/* =====================================================================
+ * MIGRATION STRUCTS & HELPER SIGNATURES
+ * ===================================================================== */
+typedef struct {
+    uint64 edge_id;
+    int32 edge_lid;
+    uint8 dir;
+    uint64 other_id;
+    int32 other_lid;
+    FullTransactionId xmin;
+    FullTransactionId xmax;
+    CommandId cmin;
+    CommandId cmax;
+    uint16 flags;
+} MigratorAdjListMember;
+
+typedef struct {
+    int32 vl_len_;
+    int32 nitems;
+    int32 maxitems;
+    MigratorAdjListMember data[FLEXIBLE_ARRAY_MEMBER];
+} MigratorAdjList;
+
+static int32 
+resolve_or_create_target_label(int32 graph_id, int32 current_label_id, const char *new_label_str, 
+                               const graph_cache_data *graph_cache, const char *raw_current_ltree)
+{
+    char *base_ltree_str = psprintf("_.%s", new_label_str);
+    Datum base_ltree_datum = DirectFunctionCall1(ltree_in, CStringGetDatum(base_ltree_str));
+    int32 base_label_id = -1;
+
+    /* 1. Find or create base label */
+    PushActiveSnapshot(GetLatestSnapshot());
+    Relation meta_rel = table_open(graph_cache->vertex_labels, AccessShareLock);
+    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+    HeapTuple tuple;
+    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+        bool isnull;
+        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, base_ltree_datum)) == 0) {
+            base_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+            break;
+        }
+    }
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+    PopActiveSnapshot();
+
+    if (base_label_id == -1) {
+        create_vlabel_internal(NameStr(graph_cache->name), new_label_str, NULL, NULL); 
+        CommandCounterIncrement(); /* CACHE INVALIDATION HAPPENS HERE */
+
+        PushActiveSnapshot(GetLatestSnapshot());
+        meta_rel = table_open(graph_cache->vertex_labels, AccessShareLock);
+        scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+        while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+            bool isnull;
+            Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+            if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, base_ltree_datum)) == 0) {
+                base_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+                break;
+            }
+        }
+        systable_endscan(scan);
+        table_close(meta_rel, AccessShareLock);
+        PopActiveSnapshot();
+    }
+
+    /* 2. Determine target path */
+    char *merged_ltree_str = NULL;
+    int32 target_label_id = -1;
+
+    if (strcmp(raw_current_ltree, "_") == 0) {
+        merged_ltree_str = pstrdup(base_ltree_str);
+    } else {
+        bool already_has_label = false;
+        char *path_copy = pstrdup(raw_current_ltree);
+        char *token = strtok(path_copy, ".");
+        while (token != NULL) {
+            if (strcmp(token, new_label_str) == 0) { 
+                already_has_label = true; 
+                break; 
+            }
+            token = strtok(NULL, ".");
+        }
+        pfree(path_copy);
+
+        if (already_has_label) {
+            pfree(base_ltree_str);
+            return current_label_id;
+        }
+        else merged_ltree_str = psprintf("%s.%s", raw_current_ltree, new_label_str);
+    }
+    pfree(base_ltree_str);
+
+    /* 3. Find or merge target label */
+    Datum target_ltree_datum = DirectFunctionCall1(ltree_in, CStringGetDatum(merged_ltree_str));
+    
+    PushActiveSnapshot(GetLatestSnapshot());
+    meta_rel = table_open(graph_cache->vertex_labels, AccessShareLock);
+    scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+        bool isnull;
+        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, target_ltree_datum)) == 0) {
+            target_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+            break;
+        }
+    }
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+    PopActiveSnapshot();
+
+    if (target_label_id == -1) {
+        merge_vlabels_internal(NameStr(graph_cache->name), current_label_id, base_label_id, NULL);
+        CommandCounterIncrement(); /* CACHE INVALIDATION HAPPENS HERE TOO */
+
+        PushActiveSnapshot(GetLatestSnapshot());
+        meta_rel = table_open(graph_cache->vertex_labels, AccessShareLock);
+        scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+        while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+            bool isnull;
+            Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+            if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, target_ltree_datum)) == 0) {
+                target_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+                break;
+            }
+        }
+        systable_endscan(scan);
+        table_close(meta_rel, AccessShareLock);
+        PopActiveSnapshot();
+    }
+    pfree(merged_ltree_str);
+
+    return target_label_id;
+}
+
+static vertex* 
+np_internal_fetch_vertex(int32 graph_id, int64 v_id, int32 v_label) 
+{
+    const label_cache_data *cache = search_vertex_label_graph_id_label_id_cache(graph_id, v_label);
+    Relation pmap = table_open(cache->phys_map, AccessShareLock);
+    uint32 tpp = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData tid;
+    np_id_to_tid(v_id, tpp, &tid);
+    
+    Buffer buf = ReadBuffer(pmap, ItemPointerGetBlockNumber(&tid));
+    LockBuffer(buf, BUFFER_LOCK_SHARE);
+    NeoPhysMapRecord *rec = (NeoPhysMapRecord *)PageGetItem(BufferGetPage(buf), PageGetItemId(BufferGetPage(buf), ItemPointerGetOffsetNumber(&tid)));
+    ItemPointerData v_tid = rec->v_itemptr;
+    UnlockReleaseBuffer(buf);
+    table_close(pmap, AccessShareLock);
+
+    Relation v_rel = table_open(cache->vertex_tbl, AccessShareLock);
+    Buffer v_buf = ReadBuffer(v_rel, ItemPointerGetBlockNumber(&v_tid));
+    LockBuffer(v_buf, BUFFER_LOCK_SHARE);
+    NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(v_buf), PageGetItemId(BufferGetPage(v_buf), ItemPointerGetOffsetNumber(&v_tid)));
+    
+    vertex *v = (vertex *)PG_DETOAST_DATUM_COPY(PointerGetDatum(hdr->serialized_entity));
+    
+    UnlockReleaseBuffer(v_buf);
+    table_close(v_rel, AccessShareLock);
+    return v;
+}
+
+static edge* 
+np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label) 
+{
+    const label_cache_data *cache = search_edge_label_graph_id_label_id_cache(graph_id, e_label);
+    Relation pmap = table_open(cache->phys_map, AccessShareLock);
+    uint32 tpp = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData tid;
+    np_id_to_tid(e_id, tpp, &tid);
+    
+    Buffer buf = ReadBuffer(pmap, ItemPointerGetBlockNumber(&tid));
+    LockBuffer(buf, BUFFER_LOCK_SHARE);
+    NeoEdgePhysMapRecord *rec = (NeoEdgePhysMapRecord *)PageGetItem(BufferGetPage(buf), PageGetItemId(BufferGetPage(buf), ItemPointerGetOffsetNumber(&tid)));
+    ItemPointerData e_tid = rec->e_itemptr;
+    UnlockReleaseBuffer(buf);
+    table_close(pmap, AccessShareLock);
+
+    Relation e_rel = table_open(cache->vertex_tbl, AccessShareLock); 
+    Buffer e_buf = ReadBuffer(e_rel, ItemPointerGetBlockNumber(&e_tid));
+    LockBuffer(e_buf, BUFFER_LOCK_SHARE);
+    NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(e_buf), PageGetItemId(BufferGetPage(e_buf), ItemPointerGetOffsetNumber(&e_tid)));
+    
+    edge *e = (edge *)PG_DETOAST_DATUM_COPY(PointerGetDatum(hdr->serialized_entity));
+    
+    UnlockReleaseBuffer(e_buf);
+    table_close(e_rel, AccessShareLock);
+    return e;
+}
+
+static void 
+migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
+                     Oid old_e_tbl_id, ItemPointerData old_e_itemptr,
+                     const graph_cache_data *graph_cache)
+{
+
+
+    if (!OidIsValid(old_e_tbl_id) || !ItemPointerIsValid(&old_e_itemptr)) {
+        return;
+    }
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    Oid curr_tbl_id = old_e_tbl_id;
+    ItemPointerData curr_tid = old_e_itemptr;
+
+    while (OidIsValid(curr_tbl_id) && ItemPointerIsValid(&curr_tid)) {
+
+        Relation rel = table_open(curr_tbl_id, AccessShareLock);
+        BlockNumber blk = ItemPointerGetBlockNumber(&curr_tid);
+        
+        /* 
+         * Safe bounds check BEFORE reading to prevent Unpin panics
+         */
+        if (blk >= RelationGetNumberOfBlocks(rel)) {
+            table_close(rel, AccessShareLock);
+            break;
+        }
+
+        Buffer buf = ReadBuffer(rel, blk);
+        LockBuffer(buf, BUFFER_LOCK_SHARE);
+        Page page = BufferGetPage(buf);
+        ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&curr_tid));
+        TupleDesc desc = RelationGetDescr(rel);
+
+        Oid next_tbl = InvalidOid;
+        ItemPointerData next_tid;
+        ItemPointerSetInvalid(&next_tid);
+
+
+if (desc->natts == 10) {
+            /* 10 columns means this is a Linked List partition */
+            NeoLinkedListRecord *rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+            next_tbl = rec->next_tbl;
+            next_tid = rec->next_itemptr;
+
+            uint64 e_id = rec->id;
+            int32 e_lid = rec->edge_lid;
+            int64 o_id = rec->other_id;
+            int32 o_lid = rec->other_lid;
+            bool is_deleted = FullTransactionIdIsValid(rec->xmax);
+
+            UnlockReleaseBuffer(buf);
+            table_close(rel, AccessShareLock);
+
+            if (!is_deleted) {
+                vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
+                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
+
+                /* Canonical delete to handle WAL/tombstones for the old vertex */
+                np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
+
+                /* Safely update both sides (handles self-loops correctly) */
+                if (e->start_id == old_v->id && e->start_label == old_v->label_id) {
+                    e->start_id = new_v->id;
+                    e->start_label = new_v->label_id;
+                }
+                if (e->end_id == old_v->id && e->end_label == old_v->label_id) {
+                    e->end_id = new_v->id;
+                    e->end_label = new_v->label_id;
+                }
+
+                /* Determine if the neighbor is us */
+                vertex *actual_neighbor = (o_id == old_v->id && o_lid == old_v->label_id) ? new_v : neighbor_v;
+
+                /* Let the definitively updated edge dictate the exact insertion order */
+                if (e->start_id == new_v->id && e->start_label == new_v->label_id) {
+                    np_internal_insert_edge(new_v, actual_neighbor, e);
+                } else {
+                    np_internal_insert_edge(actual_neighbor, new_v, e);
+                }
+
+                pfree(neighbor_v);
+                pfree(e);
+            }
+        } else if (desc->natts == 5) {
+            HeapTupleData tup;
+            tup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
+            tup.t_len = ItemIdGetLength(lp);
+            tup.t_self = curr_tid;
+
+            Datum vals[5] = {0}; bool nulls[5] = {0};
+            heap_deform_tuple(&tup, desc, vals, nulls);
+
+            next_tbl = curr_tbl_id;
+            if (!nulls[4]) {
+                next_tid = *((ItemPointer) DatumGetPointer(vals[4]));
+            } else {
+                ItemPointerSetInvalid(&next_tid);
+            }
+
+            MigratorAdjList *adj_copy = NULL;
+            if (!nulls[3]) {
+                adj_copy = (MigratorAdjList *) PG_DETOAST_DATUM_COPY(vals[3]);
+            }
+
+            UnlockReleaseBuffer(buf);
+            table_close(rel, AccessShareLock);
+
+            if (adj_copy) {
+                
+                for (int i = 0; i < adj_copy->nitems; i++) {
+                    if (FullTransactionIdIsValid(adj_copy->data[i].xmax)) {
+                        continue;
+                    }
+
+                    uint64 e_id = adj_copy->data[i].edge_id;
+                    int32 e_lid = adj_copy->data[i].edge_lid;
+                    int64 o_id = adj_copy->data[i].other_id;
+                    int32 o_lid = adj_copy->data[i].other_lid;
+                    uint8 dir = adj_copy->data[i].dir;
+
+
+                    vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
+                    edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
+
+                    np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
+
+                    if (e->start_id == old_v->id) {
+                        e->start_id = new_v->id;
+                        e->start_label = new_v->label_id;
+                    }
+                    if (e->end_id == old_v->id) {
+                        e->end_id = new_v->id;
+                        e->end_label = new_v->label_id;
+                    }
+
+                    vertex *actual_neighbor = (o_id == old_v->id) ? new_v : neighbor_v;
+                    
+                    if (e->start_id == new_v->id)
+                        np_internal_insert_edge(new_v, actual_neighbor, e);
+                    else 
+                        np_internal_insert_edge(actual_neighbor, new_v, e);
+
+
+                    pfree(neighbor_v);
+                    pfree(e);
+                }
+                pfree(adj_copy);
+            }
+        } else {
+            UnlockReleaseBuffer(buf);
+            table_close(rel, AccessShareLock);
+            break;
+        }
+
+        curr_tbl_id = next_tbl;
+        curr_tid = next_tid;
+    }
+}
+PG_FUNCTION_INFO_V1(set_vertex_label);
+Datum
+set_vertex_label(PG_FUNCTION_ARGS)
+{
+    int64 old_vid = PG_GETARG_INT64(0);
+    int32 current_label_id = PG_GETARG_INT32(1);
+    int32 graph_id = PG_GETARG_INT32(2);
+    char *new_label_str = text_to_cstring(PG_GETARG_TEXT_PP(3));
+
+    if (strchr(new_label_str, '.') != NULL)
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("labels cannot contain dots.")));
+
+    const graph_cache_data *graph_cache = search_graph_id_cache(graph_id);
+    if (!graph_cache) 
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA), errmsg("graph id %d not found", graph_id)));
+
+    const label_cache_data *current_label_cache = search_vertex_label_graph_id_label_id_cache(graph_id, current_label_id);
+    if (!current_label_cache) 
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT), errmsg("label %d not found", current_label_id)));
+
+    /* SAFEGUARD 1: Extract LTREE so the pointer isn't corrupted */
+    char *raw_current_ltree = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(current_label_cache->label)));
+
+    /* SAFEGUARD 2: Extract OIDs to the local stack BEFORE target creation overwrites the cache struct */
+    Oid safe_old_physmap_oid = current_label_cache->phys_map;
+    Oid safe_old_vertex_tbl_oid = current_label_cache->vertex_tbl;
+
+    /* 1. Resolve Target Label (This will overwrite the static cache memory!) */
+    int32 target_label_id = resolve_or_create_target_label(graph_id, current_label_id, new_label_str, graph_cache, raw_current_ltree);
+    
+    if (target_label_id == current_label_id) {
+        pfree(raw_current_ltree);
+        PG_RETURN_NULL();
+    }
+    pfree(raw_current_ltree);
+
+    /* 3. Fetch Old Vertex from Phys Map using the SAFE local OID */
+    Relation old_physmap_rel = table_open(safe_old_physmap_oid, RowExclusiveLock);
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(old_vid, pmap_tuples_per_page, &phys_map_tid);
+
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
+    Buffer pmap_buf = ReadBuffer(old_physmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+
+    /* Safe local stack copy of the phys map record */
+    NeoPhysMapRecord pmap_rec = *((NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp));
+    UnlockReleaseBuffer(pmap_buf);
+
+    // Open the entity store with plans to delete the row using the SAFE local OID
+    Relation old_v_rel = table_open(safe_old_vertex_tbl_oid, RowExclusiveLock);
+
+    // Get the buffer the vertex is on and lock it for READING ONLY
+    Buffer old_v_buf = ReadBuffer(old_v_rel, ItemPointerGetBlockNumber(&pmap_rec.v_itemptr));
+    LockBuffer(old_v_buf, BUFFER_LOCK_SHARE); // <-- MUST BE SHARE LOCK TO PREVENT DEADLOCKS
+
+    // Get the old vertex in the entity store
+    NPEntityTupleHeader old_v_hdr = (NPEntityTupleHeader) 
+        PageGetItem(BufferGetPage(old_v_buf), 
+                    PageGetItemId(BufferGetPage(old_v_buf), ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
+
+    /* 4. Prepare New Vertex Structs */
+    vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
+    vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
+
+    // RELEASE THE BUFFER LOCK IMMEDIATELY SO EDGE MIGRATION CAN READ THE PAGE
+    UnlockReleaseBuffer(old_v_buf);
+
+    int64 new_vertex_id = DatumGetInt64(DirectFunctionCall1(nextval_oid, 
+                                ObjectIdGetDatum(get_relname_relid(psprintf("np_vertex_id_seq_%d_%d", graph_id, target_label_id),
+                                                                   get_namespace_oid("neopostgraph", false)))));
+
+    /* Ensure both the struct and the header inside the varlena receive the new ID */
+    new_unpacked->id = new_vertex_id;
+    new_unpacked->label_id = target_label_id;
+
+    /* =====================================================================
+     * 4.5 EXTRACT AND PORT ANNOTATIONS
+     * ===================================================================== */
+    ArrayType *extracted_annots = NULL;
+    
+    if (ItemPointerIsValid(&pmap_rec.a_itemptr) && OidIsValid(current_label_cache->annotations_tbl)) {
+        /* A. Read the old bitset from the old annotation table */
+        Relation old_annot_rel = table_open(current_label_cache->annotations_tbl, AccessShareLock);
+        Buffer old_annot_buf = ReadBuffer(old_annot_rel, ItemPointerGetBlockNumber(&pmap_rec.a_itemptr));
+        LockBuffer(old_annot_buf, BUFFER_LOCK_SHARE);
+        Page old_annot_page = BufferGetPage(old_annot_buf);
+        ItemId old_annot_lp = PageGetItemId(old_annot_page, ItemPointerGetOffsetNumber(&pmap_rec.a_itemptr));
+        
+        NPEntityTupleHeader old_annot_hdr = (NPEntityTupleHeader) PageGetItem(old_annot_page, old_annot_lp);
+        bytea *old_bitset = (bytea *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_annot_hdr->serialized_entity));
+        
+        UnlockReleaseBuffer(old_annot_buf);
+        table_close(old_annot_rel, AccessShareLock);
+
+        /* B. Read the old annotation schema */
+        ArrayType *old_map_array = NULL;
+        if (graph_cache && OidIsValid(graph_cache->annot_schema_phys_map) && OidIsValid(graph_cache->annot_schema_tbl)) {
+            uint32 spmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+            ItemPointerData schema_pmap_tid;
+            np_id_to_tid(current_label_id, spmap_tuples_per_page, &schema_pmap_tid);
+            
+            Relation schema_pmap_rel = table_open(graph_cache->annot_schema_phys_map, AccessShareLock);
+            BlockNumber schema_pmap_blk = ItemPointerGetBlockNumber(&schema_pmap_tid);
+            
+            if (schema_pmap_blk < RelationGetNumberOfBlocks(schema_pmap_rel)) {
+                Buffer schema_pmap_buf = ReadBuffer(schema_pmap_rel, schema_pmap_blk);
+                LockBuffer(schema_pmap_buf, BUFFER_LOCK_SHARE);
+                Page schema_pmap_page = BufferGetPage(schema_pmap_buf);
+                ItemId schema_pmap_lp = PageGetItemId(schema_pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+                
+                ItemPointerData latest_schema_tid;
+                ItemPointerSetInvalid(&latest_schema_tid);
+                if (ItemIdIsNormal(schema_pmap_lp)) {
+                    NeoPhysMapRecord *spmap_rec = (NeoPhysMapRecord *) PageGetItem(schema_pmap_page, schema_pmap_lp);
+                    latest_schema_tid = spmap_rec->v_itemptr;
+                }
+                UnlockReleaseBuffer(schema_pmap_buf);
+                
+                if (ItemPointerIsValid(&latest_schema_tid)) {
+                    Relation schema_rel = table_open(graph_cache->annot_schema_tbl, AccessShareLock);
+                    Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
+                    LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+                    Page schema_page = BufferGetPage(schema_buf);
+                    ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
+                    
+                    if (ItemIdIsNormal(schema_lp)) {
+                        NPEntityTupleHeader schema_hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+                        old_map_array = DatumGetArrayTypePCopy(PointerGetDatum(schema_hdr->serialized_entity));
+                    }
+                    UnlockReleaseBuffer(schema_buf);
+                    table_close(schema_rel, AccessShareLock);
+                }
+                table_close(schema_pmap_rel, AccessShareLock); // Fixed close on success
+            } else {
+                /* Unlock if block doesn't exist */
+                table_close(schema_pmap_rel, AccessShareLock); // Fixed close on failure
+            }
+        }
+        
+        if (old_map_array == NULL) old_map_array = current_label_cache->annotation_map;
+        
+        /* C. Decode the bitset to an Array of Strings */
+        if (old_map_array != NULL) {
+            Datum *map_d;
+            bool *map_n;
+            int map_count;
+            deconstruct_array(old_map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+            
+            char *bits = VARDATA(old_bitset);
+            Datum *extracted_d = palloc(map_count * sizeof(Datum));
+            int extracted_count = 0;
+            
+            for (int i = 0; i < map_count; i++) {
+                if (map_n[i]) continue;
+                /* Check if the bit for this annotation is flipped */
+                if (bits[i / 8] & (1 << (i % 8))) {
+                    extracted_d[extracted_count++] = map_d[i];
+                }
+            }
+            
+            if (extracted_count > 0) {
+                /* Construct standard PostgreSQL text array to feed into the internal insert */
+                extracted_annots = construct_array(extracted_d, extracted_count, TEXTOID, -1, false, 'i');
+            }
+        }
+        pfree(old_bitset);
+    }
+
+    /* 5. Insert New Vertex (Handles payload and initializes the physical map) */
+    np_internal_insert_vertex(new_unpacked, extracted_annots, NULL);
+
+    /* 6. Edge Migration (Uses np_internal_insert_edge, which automatically updates the new phys map!) */
+    migrate_vertex_edges(graph_id, old_unpacked, new_unpacked,
+                         pmap_rec.e_tbl_id, pmap_rec.e_itemptr,
+                         graph_cache);
+
+    /* 7. Tombstone Old Vertex Payload Natively (Re-acquire lock EXCLUSIVELY) */
+    old_v_buf = ReadBuffer(old_v_rel, ItemPointerGetBlockNumber(&pmap_rec.v_itemptr));
+    LockBuffer(old_v_buf, BUFFER_LOCK_EXCLUSIVE);
+
+    GenericXLogState *state = GenericXLogStart(old_v_rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, old_v_buf, 0);
+    NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
+    wal_old_hdr->xmax = GetTopFullTransactionId();
+    wal_old_hdr->cmax = GetCurrentCommandId(true);
+    GenericXLogFinish(state);
+    
+    UnlockReleaseBuffer(old_v_buf);
+    table_close(old_v_rel, RowExclusiveLock);
+
+    /* 8. Clear Old Phys Map */
+    Buffer pbuf2 = ReadBuffer(old_physmap_rel, pmap_blk);
+    LockBuffer(pbuf2, BUFFER_LOCK_EXCLUSIVE);
+    
+    state = GenericXLogStart(old_physmap_rel);
+    Page ppage2 = GenericXLogRegisterBuffer(state, pbuf2, 0);
+    NeoPhysMapRecord *wal_prec = (NeoPhysMapRecord *) PageGetItem(ppage2, PageGetItemId(ppage2, ItemPointerGetOffsetNumber(&phys_map_tid)));
+    ItemPointerSetInvalid(&wal_prec->v_itemptr);
+    GenericXLogFinish(state);
+    
+    UnlockReleaseBuffer(pbuf2);
+    table_close(old_physmap_rel, RowExclusiveLock);
+
+    pfree(old_unpacked);
+    PG_RETURN_DATUM(PointerGetDatum(new_unpacked));
+}

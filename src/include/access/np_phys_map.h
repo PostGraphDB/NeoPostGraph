@@ -47,5 +47,7 @@ void np_overwrite_physmap_in_page(Relation rel, ItemPointer tid, NeoPhysMapRecor
 void np_set_edge_physmap_record(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data);
 void 
 np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid);
-
+void np_place_physmap_record(Relation rel, ItemPointer tid, NeoPhysMapRecord *new_data);
+void np_overwrite_edge_physmap_in_page(Relation rel, ItemPointer tid, NeoEdgePhysMapRecord *new_data);
+void update_vertex_phys_map(Relation pmap_rel, uint64 vertex_id, Oid new_edge_table_oid, ItemPointer new_edge_tid, CommandId cid);
 #endif // NP_MUTABLE_AM_H

@@ -20,6 +20,7 @@
 
 #include "utils/array.h"
 
+#include "access/np_phys_map.h"
 #include "catalog/np_catalog.h"
 
 #include "ltree.h"
@@ -28,25 +29,18 @@ extern Datum ltree_out(PG_FUNCTION_ARGS);
 
 #define CATALOG_LTREE_ROOT_LABEL "_"
 
-Oid create_default_vlabel(int graph_id, Oid vertex_id_seq, Oid namespace);
-Oid create_default_elabel(int graph_id, Oid vertex_id_seq, Oid namespace);
-int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta, Oid annotations_tbl, Datum annotation_map);
+#define LTREEOID \
+(GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("ltree"), ObjectIdGetDatum(public_catalog_namespace_id())))
 
-void create_vlabel_from_array(int graph_id, ArrayType *labels, Oid vertex_id_seq);
-Oid create_label_metadata_table(char *meta_tbl_name);
-Oid create_vertex_label_metadata_table(char *meta_tbl_name);
-Oid create_label_vertex_physical_mapping_table(char *meta_tbl_name, Oid namespace);
-Oid create_vertex_label_arraylist_table(char *meta_tbl_name, Oid namespace);
-Oid create_label_catalog_table(int graph_id);
+#define InvalidLabelId -1
 
-void create_metadata_btree_index(char *tbl_name);
-void create_metadata_gist_index(char *tbl_name);
+int insert_vertex_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta, Oid annotations_tbl, Datum annotation_map);
+int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map);
+int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl);
 
-Oid create_label_sequence(char *seq_name, char *namespace);
-Oid create_annotation_schema_table(int graph_id, Oid namespace);
-Oid create_annotation_schema_phys_map_table(int graph_id, Oid namespace);
-Oid create_vertex_tables(int graphid, int vertex_id_seq, Oid namespace);
+void insert_annotation_schema(int32 graph_id, int32 label_id, ArrayType *annot_array, Oid schema_tbl, Oid schema_pmap);
 void
-insert_annotation_schema(int32 graph_id, int32 label_id, ArrayType *annot_array, Oid schema_tbl, Oid schema_pmap);
+enforce_and_insert_label_catalog(Relation cat_rel, Relation idx_rel, char *label_name, char expected_type);
+Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace);
 
 #endif

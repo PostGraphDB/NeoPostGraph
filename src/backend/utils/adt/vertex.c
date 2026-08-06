@@ -92,8 +92,9 @@ build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary
 
     memcpy(&v->props, &gt->root, VARSIZE(gt));
 
-    SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
-
+    //SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+    SET_VARSIZE(v, VARSIZE(gt) + offsetof(vertex, props));
+    
     return v;
 }
 

@@ -34,7 +34,11 @@
 #include "access/transam.h"
 #include "utils/snapmgr.h"
 
+#include "dml/dml_insert.h"
 #include "access/np_linked_list.h"
+#include "access/np_phys_map.h"
+#include "catalog/np_catalog.h"
+#include "utils/np_cache.h"
 
 typedef struct NpScanDescData
 {
@@ -47,32 +51,6 @@ typedef struct NpScanDescData
     ItemPointerData   curr_next_ip;
     ItemPointerData   curr_prev_ip;
 } NpScanDescData;
-
-/*
- * Convert a 32 bit transaction id into 64 bit transaction id, by assuming it
- * is within MaxTransactionId / 2 of XidFromFullTransactionId(rel).
- *
- * Be very careful about when to use this function. It can only safely be used
- * when there is a guarantee that xid is within MaxTransactionId / 2 xids of
- * rel. That e.g. can be guaranteed if the caller assures a snapshot is
- * held by the backend and xid is from a table (where vacuum/freezing ensures
- * the xid has to be within that range), or if xid is from the procarray and
- * prevents xid wraparound that way.
- */
-static inline FullTransactionId
-FullXidRelativeTo(FullTransactionId rel, TransactionId xid)
-{
-	TransactionId rel_xid = XidFromFullTransactionId(rel);
-
-	Assert(TransactionIdIsValid(xid));
-	Assert(TransactionIdIsValid(rel_xid));
-
-	/* not guaranteed to find issues, but likely to catch mistakes */
-	AssertTransactionIdInAllowableRange(xid);
-
-	return FullTransactionIdFromU64(U64FromFullTransactionId(rel)
-									+ (int32) (xid - rel_xid));
-}
 
 
 
@@ -125,6 +103,34 @@ static bool np_linked_list_scan_getnextslot_tidrange(TableScanDesc sscan, ScanDi
 static TransactionId np_linked_list_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate);
 static void np_linked_list_estimate_rel_size(Relation rel, int32 *attr_widths, BlockNumber *pages, double *tuples, double *allvisfrac);
 
+
+/*
+ * Convert a 32 bit transaction id into 64 bit transaction id, by assuming it
+ * is within MaxTransactionId / 2 of XidFromFullTransactionId(rel).
+ *
+ * Be very careful about when to use this function. It can only safely be used
+ * when there is a guarantee that xid is within MaxTransactionId / 2 xids of
+ * rel. That e.g. can be guaranteed if the caller assures a snapshot is
+ * held by the backend and xid is from a table (where vacuum/freezing ensures
+ * the xid has to be within that range), or if xid is from the procarray and
+ * prevents xid wraparound that way.
+ */
+static inline FullTransactionId
+FullXidRelativeTo(FullTransactionId rel, TransactionId xid)
+{
+	TransactionId rel_xid = XidFromFullTransactionId(rel);
+
+	Assert(TransactionIdIsValid(xid));
+	Assert(TransactionIdIsValid(rel_xid));
+
+	/* not guaranteed to find issues, but likely to catch mistakes */
+	AssertTransactionIdInAllowableRange(xid);
+
+	return FullTransactionIdFromU64(U64FromFullTransactionId(rel)
+									+ (int32) (xid - rel_xid));
+}
+
+
 /*
  * np_linked_list_slot_callbacks - Provide the Executor with memory operations
  *
@@ -135,56 +141,6 @@ static const TupleTableSlotOps *
 np_linked_list_slot_callbacks(Relation rel)
 {
     return &TTSOpsBufferHeapTuple;
-}
-static void 
-np_write_record_to_page(Relation rel, char *data, Size data_size, ItemPointer out_tid)
-{
-    BlockNumber blockNum = RelationGetNumberOfBlocks(rel);
-
-    Buffer buffer;
-    if (blockNum == 0) {
-        buffer = ReadBuffer(rel, P_NEW);
-    } else {
-        buffer = ReadBuffer(rel, blockNum - 1);
-    }
-
-    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-    Page page = BufferGetPage(buffer);
-
-    Size space_needed = MAXALIGN(data_size) + sizeof(ItemIdData);
-    if (!PageIsNew(page) && PageGetFreeSpace(page) < space_needed) {
-        UnlockReleaseBuffer(buffer);
-        
-        buffer = ReadBuffer(rel, P_NEW);
-        LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-        page = BufferGetPage(buffer);
-    }
-
-    GenericXLogState *state = GenericXLogStart(rel);
-
-    int flags = 0;
-    if (PageIsNew(page)) {
-        flags = GENERIC_XLOG_FULL_IMAGE;
-    }
-    
-    page = GenericXLogRegisterBuffer(state, buffer, flags);
-
-    if (PageIsNew(page)) {
-        PageInit(page, BufferGetPageSize(buffer), 0);
-    }
-
-    OffsetNumber offnum = PageAddItem(page, (Item) data, data_size, InvalidOffsetNumber, false, false);
-
-    if (offnum == InvalidOffsetNumber) {
-        GenericXLogAbort(state);
-        UnlockReleaseBuffer(buffer);
-        elog(ERROR, "NeoPostGraph: Failed to add tuple to page despite free space check");
-    }
-
-    GenericXLogFinish(state);
-
-    ItemPointerSet(out_tid, BufferGetBlockNumber(buffer), offnum);
-    UnlockReleaseBuffer(buffer);
 }
 
 static void 
