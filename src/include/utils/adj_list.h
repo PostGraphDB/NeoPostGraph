@@ -27,7 +27,7 @@
 #define NP_RETURN_ADJ_LIST(x) PG_RETURN_POINTER(x)
 
 
-typedef struct AdjListMember
+typedef struct __attribute__((packed))  AdjListMember
 {
     int64 edge_id;
     int32 edge_lid;
@@ -44,7 +44,7 @@ typedef struct AdjListMember
     uint8 padding[2];
 } AdjListMember;
 
-typedef struct AdjList
+typedef struct __attribute__((packed))  AdjList
 {
     int32 vl_len_;
     int32 nitems;

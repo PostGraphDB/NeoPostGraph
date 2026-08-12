@@ -1172,9 +1172,9 @@ select * FROM np_vertex_21_10;
 (1 row)
 
 select * FROM np_vertex_21_10_phys_map;
- v_itemptr |           e_tbl_id            | e_itemptr |   a_itemptr    
------------+-------------------------------+-----------+----------------
- (0,1)     | np_vertex_21_10_1_linked_list | (0,2)     | (4294967295,0)
+ v_itemptr | e_tbl_id |   e_itemptr    |   a_itemptr    
+-----------+----------+----------------+----------------
+ (0,1)     | -        | (4294967295,0) | (4294967295,0)
 (1 row)
 
 select * FROM np_vertex_21_10_linked_list_meta;
@@ -1184,11 +1184,9 @@ select * FROM np_vertex_21_10_linked_list_meta;
 (1 row)
 
 select * from np_vertex_21_10_1_linked_list;
- id | edge_lid | dir | owner_id | other_id | other_lid |           next_tbl            |  next_itemptr  |           prev_tbl            |  prev_itemptr  
-----+----------+-----+----------+----------+-----------+-------------------------------+----------------+-------------------------------+----------------
-  4 |        1 |     |        1 |        1 |         2 | -                             | (4294967295,0) | np_vertex_21_10_1_linked_list | (0,2)
-  3 |        1 |     |        1 |        1 |         2 | np_vertex_21_10_1_linked_list | (0,1)          | -                             | (4294967295,0)
-(2 rows)
+ id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
+----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
+(0 rows)
 
 select * FROM np_vertex_21_10_linked_list_seq;
  last_value | log_cnt | is_called 
@@ -1219,4 +1217,93 @@ select * FROM np_vertex_label_21;
   9 | _.missing_label            | np_vertex_21_9  | np_vertex_21_9_phys_map  | np_vertex_21_9_linked_list_meta  | np_vertex_21_9_linked_list_seq  | np_vertex_21_9_arraylist  | np_vertex_21_9_annotations  | 
  10 | _.person.missing_label     | np_vertex_21_10 | np_vertex_21_10_phys_map | np_vertex_21_10_linked_list_meta | np_vertex_21_10_linked_list_seq | np_vertex_21_10_arraylist | np_vertex_21_10_annotations | {EMPLOYEED,FREE}
 (9 rows)
+
+-- =====================================================================
+-- TEST: remove_vertex_label (Structural Label Reduction & Dynamic DDL)
+-- =====================================================================
+-- 1. Error on invalid syntax (dots are not allowed)
+select remove_vertex_label(1::int8, 10::int4, 21::int4, 'missing.label');
+ERROR:  labels cannot contain dots.
+-- 2. Remove label to an EXISTING target path (Bob: _.person.missing_label -> _.person)
+select remove_vertex_label(1::int8, 10::int4, 21::int4, 'missing_label');
+                          remove_vertex_label                           
+------------------------------------------------------------------------
+ {"id": 4, "label": "person", "properties": {"age": 33, "name": "Bob"}}
+(1 row)
+
+select * FROM np_vertex_21_10;
+ id | vertex 
+----+--------
+(0 rows)
+
+select id, vertex FROM np_vertex_21_2 WHERE id = 4;
+ id |                                 vertex                                 
+----+------------------------------------------------------------------------
+  4 | {"id": 4, "label": "person", "properties": {"age": 33, "name": "Bob"}}
+(1 row)
+
+-- 3. Remove label to a NON-EXISTENT target path (Charlie: _.person.employee.engineer -> _.person.engineer)
+select remove_vertex_label(1::int8, 6::int4, 21::int4, 'employee');
+ERROR:  Could not find sequence for graph 21 labels
+select id, ltree, tbl FROM np_vertex_label_21 WHERE ltree = '_.person.engineer';
+ id | ltree | tbl 
+----+-------+-----
+(0 rows)
+
+select * FROM np_vertex_21_11;
+ERROR:  relation "np_vertex_21_11" does not exist
+LINE 1: select * FROM np_vertex_21_11;
+                      ^
+select * FROM np_vertex_21_6;
+ id |                                              vertex                                               
+----+---------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "label": "person:employee:engineer:FREE", "properties": {"age": 36, "name": "Charlie"}}
+(1 row)
+
+-- =====================================================================
+-- TEST: Validate Phys Map Synchronization after Compaction
+-- =====================================================================
+-- Expose the actual physical locations of the compacted arraylist tuples
+SELECT ctid AS actual_arraylist_ctid, id AS owner_id 
+FROM np_vertex_21_2_arraylist;
+ actual_arraylist_ctid | owner_id 
+-----------------------+----------
+ (0,3)                 |        1
+ (0,4)                 |        2
+(2 rows)
+
+-- Expose the pointers in the physical map
+SELECT v_itemptr, e_tbl_id, e_itemptr
+FROM np_vertex_21_2_phys_map;
+   v_itemptr    |         e_tbl_id         |   e_itemptr    
+----------------+--------------------------+----------------
+ (0,3)          | np_vertex_21_2_arraylist | (0,3)
+ (4294967295,0) | np_vertex_21_2_arraylist | (0,4)
+ (0,4)          | -                        | (4294967295,0)
+ (0,5)          | -                        | (4294967295,0)
+(4 rows)
+
+-- (Strict Validation) This must return 0 rows. 
+-- Filters out InvalidTid '(4294967295,0)' to only catch legitimately broken live pointers.
+SELECT p.v_itemptr, p.e_itemptr AS broken_pointer 
+FROM np_vertex_21_2_phys_map p
+LEFT JOIN np_vertex_21_2_arraylist a ON p.e_itemptr = a.ctid
+WHERE a.ctid IS NULL 
+  AND p.e_itemptr::text != '(4294967295,0)';
+ v_itemptr | broken_pointer 
+-----------+----------------
+(0 rows)
+
+-- 4. Remove the ONLY remaining label (Alex: _.person -> _)
+select remove_vertex_label(1::int8, 2::int4, 21::int4, 'person');
+                        remove_vertex_label                        
+-------------------------------------------------------------------
+ {"id": 3, "label": "", "properties": {"age": 30, "name": "Alex"}}
+(1 row)
+
+select id, vertex FROM np_vertex_21_1 WHERE id = 3;
+ id |                              vertex                               
+----+-------------------------------------------------------------------
+  3 | {"id": 3, "label": "", "properties": {"age": 30, "name": "Alex"}}
+(1 row)
 

@@ -164,7 +164,7 @@ np_linked_list_tableam_tuple_insert(Relation relation, TupleTableSlot *slot, Com
     rec.edge_lid = DatumGetInt32(slot->tts_values[1]);
     rec.dir = DatumGetChar(slot->tts_values[2]);
     
-    rec.owner_id = DatumGetInt64(slot->tts_values[3]);    /* NEW: owner_id */
+    rec.owner_id = DatumGetInt64(slot->tts_values[3]);
     
     rec.other_id = DatumGetInt64(slot->tts_values[4]);
     rec.other_lid = DatumGetInt32(slot->tts_values[5]);

@@ -390,3 +390,46 @@ select * FROM np_vertex_21_10_annotations;
 
 
 select * FROM np_vertex_label_21;
+
+
+
+-- =====================================================================
+-- TEST: remove_vertex_label (Structural Label Reduction & Dynamic DDL)
+-- =====================================================================
+
+-- 1. Error on invalid syntax (dots are not allowed)
+select remove_vertex_label(1::int8, 10::int4, 21::int4, 'missing.label');
+
+-- 2. Remove label to an EXISTING target path (Bob: _.person.missing_label -> _.person)
+select remove_vertex_label(1::int8, 10::int4, 21::int4, 'missing_label');
+select * FROM np_vertex_21_10;
+select id, vertex FROM np_vertex_21_2 WHERE id = 4;
+
+-- 3. Remove label to a NON-EXISTENT target path (Charlie: _.person.employee.engineer -> _.person.engineer)
+select remove_vertex_label(1::int8, 6::int4, 21::int4, 'employee');
+select id, ltree, tbl FROM np_vertex_label_21 WHERE ltree = '_.person.engineer';
+select * FROM np_vertex_21_11;
+select * FROM np_vertex_21_6;
+
+-- =====================================================================
+-- TEST: Validate Phys Map Synchronization after Compaction
+-- =====================================================================
+-- Expose the actual physical locations of the compacted arraylist tuples
+SELECT ctid AS actual_arraylist_ctid, id AS owner_id 
+FROM np_vertex_21_2_arraylist;
+
+-- Expose the pointers in the physical map
+SELECT v_itemptr, e_tbl_id, e_itemptr
+FROM np_vertex_21_2_phys_map;
+
+-- (Strict Validation) This must return 0 rows. 
+-- Filters out InvalidTid '(4294967295,0)' to only catch legitimately broken live pointers.
+SELECT p.v_itemptr, p.e_itemptr AS broken_pointer 
+FROM np_vertex_21_2_phys_map p
+LEFT JOIN np_vertex_21_2_arraylist a ON p.e_itemptr = a.ctid
+WHERE a.ctid IS NULL 
+  AND p.e_itemptr::text != '(4294967295,0)';
+
+-- 4. Remove the ONLY remaining label (Alex: _.person -> _)
+select remove_vertex_label(1::int8, 2::int4, 21::int4, 'person');
+select id, vertex FROM np_vertex_21_1 WHERE id = 3;

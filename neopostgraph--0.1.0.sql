@@ -209,6 +209,12 @@ RETURNS vertex
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'set_vertex_label';
 
+
+CREATE FUNCTION remove_vertex_label(vertex_id bigint, label_id integer, graph_id integer, label_name text)
+RETURNS vertex
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'remove_vertex_label';
+
 CREATE FUNCTION update_vertex(id int8, labelid int4, graphid int4, new_properties gtype)
 RETURNS void
 LANGUAGE c

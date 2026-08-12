@@ -49,7 +49,6 @@ static void register_and_validate_labels(int graph_id, char *struct_label, Array
 static ArrayType *merge_and_dedupe_text_arrays(ArrayType *arr1, ArrayType *arr2);
 static Oid execute_internal_create_table(const char *namespace_name, const char *tbl_name, List *table_elts, const char *access_method);
 static void execute_internal_create_index(const char *namespace_name, const char *tbl_name, const char *idx_name, const char *col_name, const char *access_method, bool is_unique, bool is_primary);
-static Oid build_vertex_label_infrastructure(int graph_id, int label_id, Oid namespace, Datum label_ltree, int byte_allocation_size, Datum annot_map_datum, ArrayType *annot_array, Oid annot_schema_tbl, Oid annot_schema_phys_map);
 
 
 PG_FUNCTION_INFO_V1(create_vlabel);
@@ -179,7 +178,7 @@ Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
     return edge_tbl;
 }
 
-static Oid build_vertex_label_infrastructure(
+Oid build_vertex_label_infrastructure(
     int graph_id, int label_id, Oid namespace,
     Datum label_ltree, int byte_allocation_size,
     Datum annot_map_datum, ArrayType *annot_array,
