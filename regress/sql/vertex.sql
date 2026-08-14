@@ -433,3 +433,81 @@ WHERE a.ctid IS NULL
 -- 4. Remove the ONLY remaining label (Alex: _.person -> _)
 select remove_vertex_label(1::int8, 2::int4, 21::int4, 'person');
 select id, vertex FROM np_vertex_21_1 WHERE id = 3;
+
+
+
+-- =====================================================================
+-- TEST: drop_vlabel (Mass Migration & Non-blocking Catalog Drop)
+-- =====================================================================
+
+SELECT create_graph('drop_graph', 'public');
+
+-- 1. Setup Label Hierarchy: _.entity.organization.department
+SELECT create_vlabel('drop_graph', 'entity');
+SELECT create_vlabel('drop_graph', 'organization');
+SELECT create_vlabel('drop_graph', 'department');
+
+-- Assuming IDs: root=1, entity=2, organization=3, department=4
+SELECT merge_vlabels('drop_graph', 2, 3); -- Creates _.entity.organization (ID=5)
+SELECT merge_vlabels('drop_graph', 5, 4); -- Creates _.entity.organization.department (ID=6)
+
+-- 2. Insert Test Vertices
+-- Insert into _.entity (ID 2)
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_2'), 22, 2, 0::smallint, '{"name": "Generic Entity"}'::gtype));
+
+-- Insert into _.entity.organization (ID 5)
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::smallint, '{"name": "Acme Corp"}'::gtype));
+
+-- Insert into _.entity.organization.department (ID 6)
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint, '{"name": "Engineering"}'::gtype));
+
+-- Verify initial catalog state
+SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+
+-- =====================================================================
+-- SCENARIO A: Drop a leaf label ('department')
+-- Expected: Engineering vertex moves to _.entity.organization
+-- =====================================================================
+SELECT drop_vlabel('drop_graph', 'department');
+
+-- Verify catalog: ID 6 (_.entity.organization.department) should be GONE
+SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+
+-- Verify vertex migration: 'Engineering' should now live in _.entity.organization (table np_vertex_22_5)
+SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
+
+-- Verify MVCC Preservation: The old physical table should still exist, but be empty for new transactions
+SELECT count(*) FROM np_vertex_22_6;
+
+
+-- =====================================================================
+-- SCENARIO B: Drop an intermediate label ('organization')
+-- Expected: Both 'Acme Corp' and 'Engineering' (which is now in organization)
+--           move up to _.entity.
+-- =====================================================================
+SELECT drop_vlabel('drop_graph', 'organization');
+
+-- Verify catalog: ID 5 (_.entity.organization) should be GONE
+SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+
+-- Verify vertex migration: 'Acme Corp' and 'Engineering' should now live in _.entity (table np_vertex_22_2)
+SELECT id, vertex FROM np_vertex_22_2 ORDER BY id;
+
+-- Verify MVCC Preservation: The old physical table should still exist and not throw an error
+SELECT count(*) FROM np_vertex_22_5;
+
+
+-- =====================================================================
+-- SCENARIO C: Drop the base label ('entity')
+-- Expected: All vertices fallback to the root label table (_)
+-- =====================================================================
+SELECT drop_vlabel('drop_graph', 'entity');
+
+-- Verify catalog: ID 2 (_.entity) should be GONE. Only ID 1 (_) should remain.
+SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+
+-- Verify vertex migration: ALL vertices should now live in the root table (np_vertex_22_1)
+SELECT id, vertex FROM np_vertex_22_1 ORDER BY id;
+
+-- Verify MVCC Preservation: The old physical table still exists
+SELECT count(*) FROM np_vertex_22_2;

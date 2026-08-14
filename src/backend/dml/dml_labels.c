@@ -74,6 +74,7 @@ extern Datum ltxtq_in(PG_FUNCTION_ARGS);
 extern Datum ltree_out(PG_FUNCTION_ARGS);
 extern Datum ltree_isparent(PG_FUNCTION_ARGS);
 extern Datum ltree_cmp(PG_FUNCTION_ARGS);
+extern Datum ltxtq_exec(PG_FUNCTION_ARGS);
 
 static int32 
 resolve_reduced_target_label(int32 graph_id, int32 current_label_id, const char *label_to_remove, 
@@ -658,15 +659,29 @@ set_vertex_label(PG_FUNCTION_ARGS)
     PG_RETURN_DATUM(PointerGetDatum(new_unpacked));
 }
 
+Datum np_internal_remove_vertex_label(int64 old_vid, int32 current_label_id, int32 graph_id, const char *label_to_remove, Buffer external_pmap_buf);
+
 PG_FUNCTION_INFO_V1(remove_vertex_label);
 Datum
 remove_vertex_label(PG_FUNCTION_ARGS)
 {
-    int64 old_vid = PG_GETARG_INT64(0);
-    int32 current_label_id = PG_GETARG_INT32(1);
+    int64 v_id = PG_GETARG_INT64(0);
+    int32 old_label_id = PG_GETARG_INT32(1);
     int32 graph_id = PG_GETARG_INT32(2);
-    char *label_to_remove = text_to_cstring(PG_GETARG_TEXT_PP(3));
+    
+    /* THE FIX: Safely detoast and null-terminate the text datum */
+    text *label_text = PG_GETARG_TEXT_PP(3);
+    char *label_str = text_to_cstring(label_text);
+    
+    Datum ret = np_internal_remove_vertex_label(v_id, old_label_id, graph_id, label_str, InvalidBuffer);
+    
+    pfree(label_str);
+    return ret;
+}
 
+Datum
+np_internal_remove_vertex_label(int64 old_vid, int32 current_label_id, int32 graph_id, const char *label_to_remove, Buffer external_pmap_buf)
+{
     if (strchr(label_to_remove, '.') != NULL)
         ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("labels cannot contain dots.")));
 
@@ -688,10 +703,6 @@ remove_vertex_label(PG_FUNCTION_ARGS)
     /* 1. Resolve Target Reduced Label */
     int32 target_label_id = resolve_reduced_target_label(graph_id, current_label_id, label_to_remove, graph_cache, raw_current_ltree);
     
-    if (target_label_id == current_label_id) {
-        pfree(raw_current_ltree);
-        PG_RETURN_NULL();
-    }
     pfree(raw_current_ltree);
 
     /* 3. Fetch Old Vertex from Phys Map using the SAFE local OID */
@@ -701,15 +712,30 @@ remove_vertex_label(PG_FUNCTION_ARGS)
     np_id_to_tid(old_vid, pmap_tuples_per_page, &phys_map_tid);
 
     BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
-    Buffer pmap_buf = ReadBuffer(old_physmap_rel, pmap_blk);
-    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    
+    bool has_ext_buf = BufferIsValid(external_pmap_buf);
+    Buffer pmap_buf = has_ext_buf ? external_pmap_buf : ReadBuffer(old_physmap_rel, pmap_blk);
+
+    if (!has_ext_buf) {
+        LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    }
 
     Page pmap_page = BufferGetPage(pmap_buf);
     ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
 
     /* Safe local stack copy of the phys map record */
     NeoPhysMapRecord pmap_rec = *((NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp));
-    UnlockReleaseBuffer(pmap_buf);
+
+    /* SAFEGUARD: Catch double-deletions before they crash the engine */
+    if (!ItemPointerIsValid(&pmap_rec.v_itemptr)) {
+        if (!has_ext_buf) UnlockReleaseBuffer(pmap_buf);
+        table_close(old_physmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_NO_DATA_FOUND), errmsg("Vertex %ld not found or already migrated", old_vid)));
+    }
+
+    if (!has_ext_buf) {
+        UnlockReleaseBuffer(pmap_buf);
+    }
 
     // Open the entity store with plans to delete the row using the SAFE local OID
     Relation old_v_rel = table_open(safe_old_vertex_tbl_oid, RowExclusiveLock);
@@ -933,20 +959,29 @@ remove_vertex_label(PG_FUNCTION_ARGS)
     table_close(old_v_rel, RowExclusiveLock);
 
     /* 8. Clear Old Phys Map */
-    Buffer pbuf2 = ReadBuffer(old_physmap_rel, pmap_blk);
-    LockBuffer(pbuf2, BUFFER_LOCK_EXCLUSIVE);
-    
-    state = GenericXLogStart(old_physmap_rel);
-    Page ppage2 = GenericXLogRegisterBuffer(state, pbuf2, 0);
-    NeoPhysMapRecord *wal_prec = (NeoPhysMapRecord *) PageGetItem(ppage2, PageGetItemId(ppage2, ItemPointerGetOffsetNumber(&phys_map_tid)));
-    ItemPointerSetInvalid(&wal_prec->v_itemptr);
-    GenericXLogFinish(state);
-    
-    UnlockReleaseBuffer(pbuf2);
+    if (has_ext_buf) {
+        state = GenericXLogStart(old_physmap_rel);
+        Page ppage2 = GenericXLogRegisterBuffer(state, external_pmap_buf, 0);
+        NeoPhysMapRecord *wal_prec = (NeoPhysMapRecord *) PageGetItem(ppage2, PageGetItemId(ppage2, ItemPointerGetOffsetNumber(&phys_map_tid)));
+        ItemPointerSetInvalid(&wal_prec->v_itemptr);
+        GenericXLogFinish(state);
+    } else {
+        Buffer pbuf2 = ReadBuffer(old_physmap_rel, pmap_blk);
+        LockBuffer(pbuf2, BUFFER_LOCK_EXCLUSIVE);
+        
+        state = GenericXLogStart(old_physmap_rel);
+        Page ppage2 = GenericXLogRegisterBuffer(state, pbuf2, 0);
+        NeoPhysMapRecord *wal_prec = (NeoPhysMapRecord *) PageGetItem(ppage2, PageGetItemId(ppage2, ItemPointerGetOffsetNumber(&phys_map_tid)));
+        ItemPointerSetInvalid(&wal_prec->v_itemptr);
+        GenericXLogFinish(state);
+        
+        UnlockReleaseBuffer(pbuf2);
+    }
+
     table_close(old_physmap_rel, RowExclusiveLock);
 
     pfree(old_unpacked);
-    PG_RETURN_DATUM(PointerGetDatum(new_unpacked));
+    return (PointerGetDatum(new_unpacked));
 }
 
 static int32
@@ -1045,4 +1080,109 @@ resolve_reduced_target_label(int32 graph_id, int32 current_label_id, const char 
     
     pfree(new_path.data);
     return target_id;
+}
+
+uint64
+np_tid_to_id(ItemPointer tid, uint32 tuples_per_page)
+{
+    BlockNumber block = ItemPointerGetBlockNumber(tid);
+    OffsetNumber offset = ItemPointerGetOffsetNumber(tid);
+
+    uint64 zero_based_id = ((uint64)block * tuples_per_page) + (offset - 1);
+    
+    return zero_based_id + 1;
+}
+PG_FUNCTION_INFO_V1(drop_vlabel);
+Datum
+drop_vlabel(PG_FUNCTION_ARGS)
+{
+    /* Arg 0 is `name` (64-byte struct), Arg 1 is `text` (varlena) */
+    Name graph_name = PG_GETARG_NAME(0);
+    char *graph_name_str = NameStr(*graph_name);
+    
+    text *label_text = PG_GETARG_TEXT_PP(1);
+    char *label_str = text_to_cstring(label_text);
+
+    Oid namespace = linitial_oid(fetch_search_path(false));
+    const graph_cache_data *graph = search_graph_name_namespace_cache(graph_name_str, namespace);    
+    if (!graph)
+        ereport(ERROR, (errmsg("NeoPostGraph: Graph '%s' not found", graph_name_str)));
+
+    int32 graph_id = graph->id;
+
+    /* PASS 1: Native GiST Index Scan */
+    Relation catalog_rel = table_open(graph->vertex_labels, AccessShareLock);
+
+    ScanKeyData skey[1];
+    ScanKeyInit(&skey[0], 2, 14,
+        DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
+        DirectFunctionCall1(ltxtq_in, CStringGetDatum(label_str))
+    );
+
+    Oid idx_oid = np_relation_id(psprintf("np_vertex_label_%d_gist_idx", graph_id), "index");
+    SysScanDesc cat_scan = systable_beginscan(catalog_rel, idx_oid, true, GetActiveSnapshot(), 1, skey);
+
+    int max_drops = 128;
+    int drop_count = 0;
+    int32 *drop_list = palloc(sizeof(int32) * max_drops);
+
+    HeapTuple cat_tuple;
+    while (HeapTupleIsValid(cat_tuple = systable_getnext(cat_scan))) {
+        bool isnull;
+        int32 match_id = DatumGetInt32(heap_getattr(cat_tuple, 1, RelationGetDescr(catalog_rel), &isnull));
+        
+        if (drop_count >= max_drops) {
+            max_drops *= 2;
+            drop_list = repalloc(drop_list, sizeof(int32) * max_drops);
+        }
+        drop_list[drop_count++] = match_id;
+    }
+    systable_endscan(cat_scan);
+    table_close(catalog_rel, AccessShareLock);
+
+    /* PASS 2: Inline execution passing external_pmap_buf down */
+    for (int i = 0; i < drop_count; i++) {
+        int32 old_label_id = drop_list[i];
+        
+        const label_cache_data *label_cache = search_vertex_label_graph_id_label_id_cache(graph_id, old_label_id);
+        Relation pmap = table_open(label_cache->phys_map, AccessShareLock);
+        
+        BlockNumber nblocks = RelationGetNumberOfBlocks(pmap);
+        uint32 tpp = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+        
+        for (BlockNumber blk = 0; blk < nblocks; blk++) {
+            Buffer buf = ReadBuffer(pmap, blk);
+            
+            /* Acquire EXCLUSIVE lock once for the entire page */
+            LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+            
+            Page page = BufferGetPage(buf);
+            OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+
+            for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; off++) {
+                ItemId lp = PageGetItemId(page, off);
+                if (!ItemIdIsNormal(lp)) continue;
+
+                NeoPhysMapRecord *rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
+                if (!ItemPointerIsValid(&rec->v_itemptr)) continue;
+
+                /* THE FIX: Reconstruct the exact VID using the formal inverse function */
+                ItemPointerData pmap_tid;
+                ItemPointerSet(&pmap_tid, blk, off);
+                int64 v_id = (int64) np_tid_to_id(&pmap_tid, tpp);
+                
+                /* Execute inline immediately - pass the exclusively locked buffer straight down */
+                np_internal_remove_vertex_label(v_id, old_label_id, graph_id, label_str, buf);
+            }
+            
+            /* Safely release when the page is completely migrated */
+            UnlockReleaseBuffer(buf);
+        }
+        
+        table_close(pmap, AccessShareLock);
+    }
+
+    pfree(drop_list);
+    pfree(label_str);
+    PG_RETURN_VOID();
 }
