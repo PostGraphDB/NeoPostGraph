@@ -15,6 +15,7 @@
 #include "utils/adj_list.h"
 #include "access/np_linked_list.h"
 #include "access/np_phys_map.h"
+#include "catalog/np_label.h"
 
 typedef struct CompactedVertexEntry {
     uint64 owner_id;                
@@ -455,7 +456,7 @@ if (OidIsValid(entry->upstream_tbl)) {
 
             HeapTuple newtup = heap_modify_tuple(meta_tuple, RelationGetDescr(meta_rel), 
                                                  values, nulls, replace);
-            CatalogTupleUpdate(meta_rel, &meta_tuple->t_self, newtup);
+            np_catalog_update(meta_rel, meta_tuple, newtup);
             heap_freetuple(newtup);
             break;
         }

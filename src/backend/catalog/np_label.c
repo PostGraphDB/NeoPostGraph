@@ -48,6 +48,9 @@
 #include "nodes/makefuncs.h"
 #include "miscadmin.h"
 #include "utils/inval.h"
+#include "access/tableam.h"
+#include "catalog/index.h"
+#include "executor/tuptable.h"
 
 #include "utils/datum.h"
 
@@ -377,11 +380,16 @@ int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl)
     CommandCounterIncrement();
     return 0;
 }
-int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta, Oid annotations_tbl, Datum annotation_map)
+
+#include "access/tableam.h"
+#include "catalog/index.h"
+#include "executor/tuptable.h"
+
+void insert_vertex_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map, Oid arraylist, Oid ll_seq, Oid ll_meta, Oid annotations_tbl, Datum annotation_map)
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
 
-    Datum values[9] = {
+    Datum values[10] = {
         ObjectIdGetDatum(label_id),
         label,
         ObjectIdGetDatum(tbl),
@@ -390,15 +398,51 @@ int insert_vertex_label(char *table_name, Datum label,Oid label_id, Oid tbl, Oid
         ObjectIdGetDatum(ll_seq),
         ObjectIdGetDatum(arraylist),
         ObjectIdGetDatum(annotations_tbl),
-        annotation_map
+        annotation_map,
+        BoolGetDatum(true) /* COL 10: is_primary = true */
     };
-    bool nulls[9] = { false, false, false, false, false, false, false };
-
+    
+    bool nulls[10] = { false };
     if (annotation_map == (Datum)0)
         nulls[8] = true;
 
-    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+    HeapTuple tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
+    /* Initialize slot FIRST, table_tuple_insert requires it */
+    TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
+    ExecStoreHeapTuple(tup, slot, false);
+
+    /* 1. Insert directly into the table heap via slot */
+    table_tuple_insert(rel, slot, GetCurrentCommandId(true), 0, NULL);
+
+    /* 2. Manually insert into indexes */
+    List *indexoidlist = RelationGetIndexList(rel);
+    ListCell *lc;
+
+    foreach(lc, indexoidlist) {
+        Oid index_oid = lfirst_oid(lc);
+        Relation indexDesc = index_open(index_oid, RowExclusiveLock);
+        IndexInfo *indexInfo = BuildIndexInfo(indexDesc);
+
+        Datum idx_values[INDEX_MAX_KEYS];
+        bool idx_nulls[INDEX_MAX_KEYS];
+
+        FormIndexDatum(indexInfo, slot, NULL, idx_values, idx_nulls);
+
+        /* Missing 'false' for indexUnchanged parameter added */
+        index_insert(indexDesc, idx_values, idx_nulls,
+                     &(slot->tts_tid),
+                     rel,
+                     indexDesc->rd_index->indisunique ? UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+                     false,
+                     indexInfo);
+
+        index_close(indexDesc, RowExclusiveLock);
+    }
+
+    ExecDropSingleTupleTableSlot(slot);
+    list_free(indexoidlist);
+    heap_freetuple(tup);
     table_close(rel, RowExclusiveLock);
 
     CommandCounterIncrement();
@@ -408,20 +452,62 @@ int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
 
-    Datum values[4] = {
+    /* Update to 5 columns to account for the is_primary flag */
+    Datum values[5] = {
         ObjectIdGetDatum(label_id),
         label,
         ObjectIdGetDatum(tbl),
-        ObjectIdGetDatum(phys_map)
+        ObjectIdGetDatum(phys_map),
+        BoolGetDatum(true) /* COL 5: is_primary = true */
     };
-    bool nulls[4] = { false, false, false, false };
+    
+    /* Initialize all 5 to false safely */
+    bool nulls[5] = { false };
 
-    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+    HeapTuple tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
+    /* Create a slot specifically designed to hold an in-memory HeapTuple */
+    TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
+    ExecStoreHeapTuple(tup, slot, false);
+
+    /* 1. Insert directly into the table heap via slot (Bypasses CatalogTupleInsert) */
+    table_tuple_insert(rel, slot, GetCurrentCommandId(true), 0, NULL);
+
+    /* 2. Manually insert into indexes, bypassing the CatalogIndexInsert assertion */
+    List *indexoidlist = RelationGetIndexList(rel);
+    ListCell *lc;
+
+    foreach(lc, indexoidlist) {
+        Oid index_oid = lfirst_oid(lc);
+        Relation indexDesc = index_open(index_oid, RowExclusiveLock);
+        IndexInfo *indexInfo = BuildIndexInfo(indexDesc);
+
+        Datum idx_values[INDEX_MAX_KEYS];
+        bool idx_nulls[INDEX_MAX_KEYS];
+
+        /* Extract the specific index data from the tuple slot */
+        FormIndexDatum(indexInfo, slot, NULL, idx_values, idx_nulls);
+
+        /* Push into the index natively */
+        index_insert(indexDesc, idx_values, idx_nulls,
+                     &(slot->tts_tid),
+                     rel,
+                     indexDesc->rd_index->indisunique ? UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+                     false, /* indexUnchanged */
+                     indexInfo);
+
+        index_close(indexDesc, RowExclusiveLock);
+    }
+
+    /* Cleanup */
+    ExecDropSingleTupleTableSlot(slot);
+    list_free(indexoidlist);
+    heap_freetuple(tup);
     table_close(rel, RowExclusiveLock);
+
     CommandCounterIncrement();
     
-    return 0; /* Just returning 0 since the signature expects int */
+    return 0;
 }
 
 typedef struct {
@@ -842,7 +928,7 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
-    ltree->constraints = list_make2(build_not_null_constraint(), build_unique_constraint());
+    ltree->constraints = list_make1(build_not_null_constraint());
     ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
     vertex_tbl->constraints = list_make1(build_not_null_constraint());
     ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
@@ -856,12 +942,15 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     ColumnDef *annotations_tbl = makeColumnDef("annotations_tbl", REGCLASSOID, -1, InvalidOid);
     annotations_tbl->constraints = list_make1(build_not_null_constraint());
     ColumnDef *annotation_map = makeColumnDef("annotation_map", TEXTARRAYOID, -1, InvalidOid);
-    
+    ColumnDef *is_primary = makeColumnDef("is_primary", BOOLOID, -1, InvalidOid);
+    is_primary->constraints = list_make1(build_not_null_constraint());
+
     List *tableElts = list_make5(id, ltree, vertex_tbl, phys_map, linked_list_meta);
     tableElts = lappend(tableElts, linked_list_seq);
     tableElts = lappend(tableElts, arraylist);
     tableElts = lappend(tableElts, annotations_tbl);
     tableElts = lappend(tableElts, annotation_map);
+    tableElts = lappend(tableElts, is_primary);
     create_stmt->tableElts = tableElts;
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
@@ -1547,7 +1636,7 @@ Datum add_annotation_label(PG_FUNCTION_ARGS)
                 nulls[8] = false;
 
                 HeapTuple updated_tup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel), values, nulls, replace);
-                CatalogTupleUpdate(meta_rel, &tuple->t_self, updated_tup);
+                np_catalog_update(meta_rel, tuple, updated_tup);
                 heap_freetuple(updated_tup);
 
                 pfree(values);
@@ -1956,7 +2045,7 @@ Datum drop_annotation_label(PG_FUNCTION_ARGS)
                         nulls[8] = false;
 
                         HeapTuple updated_tup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel), values, nulls, replace);
-                        CatalogTupleUpdate(meta_rel, &tuple->t_self, updated_tup);
+                        np_catalog_update(meta_rel, tuple, updated_tup);
                         heap_freetuple(updated_tup);
 
                         pfree(values);
@@ -2038,8 +2127,8 @@ if (!OidIsValid(ll_seq_oid) || !OidIsValid(ll_meta_oid))
             nulls[2] = false;
 
             HeapTuple newtup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel),
-                                                   values, nulls, replace);
-            CatalogTupleUpdate(meta_rel, &tuple->t_self, newtup);
+                                                values, nulls, replace);
+            np_catalog_update(meta_rel, tuple, newtup);
             heap_freetuple(newtup);
             break;
         }
@@ -2161,4 +2250,75 @@ create_vertex_label_annotation_table(char *tbl_name, Oid namespace, int byte_all
     CommandCounterIncrement();
 
     return get_relname_relid(tbl_name, namespace);
+}
+
+
+void np_catalog_update(Relation rel, HeapTuple old_tup, HeapTuple new_tup)
+{
+    /* Create an in-memory slot for the new tuple */
+    TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
+    ExecStoreHeapTuple(new_tup, slot, false);
+
+    TU_UpdateIndexes update_indexes;
+    TM_FailureData tmfd;
+    LockTupleMode lockmode;
+
+    /* 1. Update the heap directly (Bypasses np_catalog_update) */
+    TM_Result result = table_tuple_update(rel, &(old_tup->t_self), slot,
+                                          GetCurrentCommandId(true),
+                                          GetActiveSnapshot(),
+                                          InvalidSnapshot,
+                                          true, /* wait for commit */
+                                          &tmfd, &lockmode, &update_indexes);
+
+    if (result != TM_Ok) {
+        elog(ERROR, "NeoPostGraph: failed to update catalog tuple");
+    }
+
+    /* 2. Manually update indexes if necessary */
+    if (update_indexes != TU_None) {
+        List *indexoidlist = RelationGetIndexList(rel);
+        ListCell *lc;
+
+        foreach(lc, indexoidlist) {
+            Oid index_oid = lfirst_oid(lc);
+            Relation indexDesc = index_open(index_oid, RowExclusiveLock);
+            IndexInfo *indexInfo = BuildIndexInfo(indexDesc);
+
+            Datum idx_values[INDEX_MAX_KEYS];
+            bool idx_nulls[INDEX_MAX_KEYS];
+
+            FormIndexDatum(indexInfo, slot, NULL, idx_values, idx_nulls);
+
+            /* 
+             * Check if the new tuple still satisfies the partial index predicate.
+             * For our is_primary index, we check if is_primary is true.
+             */
+            bool satisfy_predicate = true;
+            if (indexInfo->ii_Predicate != NIL) {
+                /* 
+                 * We can do a quick check: if the 10th column (is_primary) is false,
+                 * skip index insertion for this specific partial GiST index.
+                 */
+                bool is_null;
+                Datum is_primary_datum = heap_getattr(new_tup, 10, RelationGetDescr(rel), &is_null);
+                if (!is_null && !DatumGetBool(is_primary_datum)) {
+                    satisfy_predicate = false;
+                }
+            }
+
+            if (satisfy_predicate) {
+                index_insert(indexDesc, idx_values, idx_nulls,
+                             &(slot->tts_tid), rel,
+                             indexDesc->rd_index->indisunique ? UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+                             false, /* indexUnchanged */
+                             indexInfo);
+            }
+
+            index_close(indexDesc, RowExclusiveLock);
+        }
+        list_free(indexoidlist);
+    }
+
+    ExecDropSingleTupleTableSlot(slot);
 }

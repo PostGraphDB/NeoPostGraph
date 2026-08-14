@@ -48,8 +48,9 @@
 static void register_and_validate_labels(int graph_id, char *struct_label, ArrayType *annot_array);
 static ArrayType *merge_and_dedupe_text_arrays(ArrayType *arr1, ArrayType *arr2);
 static Oid execute_internal_create_table(const char *namespace_name, const char *tbl_name, List *table_elts, const char *access_method);
-static void execute_internal_create_index(const char *namespace_name, const char *tbl_name, const char *idx_name, const char *col_name, const char *access_method, bool is_unique, bool is_primary);
-
+static void 
+execute_internal_create_index(const char *namespace_name, const char *tbl_name, const char *idx_name, 
+                              const char *col_name, const char *access_method, bool is_unique, bool is_primary, Node *where_clause);
 
 PG_FUNCTION_INFO_V1(create_vlabel);
 Datum 
@@ -289,32 +290,52 @@ Oid create_label_catalog_table(int graph_id) {
                                                     list_make2(label_name, label_type), NULL);
 
     execute_internal_create_index("neopostgraph", tbl_name, psprintf("%s_idx", tbl_name), 
-                                  "label_name", "btree", true, true);
+                                  "label_name", "btree", true, true, NULL);
     return catalog_oid;
 }
 
 Oid create_label_metadata_table(char *meta_tbl_name) {
     ColumnDef *id = makeColumnDef("id", INT4OID, -1, InvalidOid);
     id->constraints = list_make1(build_not_null_constraint());
+    
     ColumnDef *ltree = makeColumnDef("ltree", LTREEOID, -1, InvalidOid);
-    ltree->constraints = list_make2(build_not_null_constraint(), build_unique_constraint());
+    ltree->constraints = list_make1(build_not_null_constraint());
+    
     ColumnDef *vertex_tbl = makeColumnDef("tbl", REGCLASSOID, -1, InvalidOid);
     vertex_tbl->constraints = list_make1(build_not_null_constraint());
+    
     ColumnDef *phys_map = makeColumnDef("phys_map", REGCLASSOID, -1, InvalidOid);
     phys_map->constraints = list_make1(build_not_null_constraint());
 
-    return execute_internal_create_table("neopostgraph", meta_tbl_name, 
-                                         list_make4(id, ltree, vertex_tbl, phys_map), NULL);
+    /* Add is_primary column with DEFAULT true */
+    ColumnDef *is_primary = makeColumnDef("is_primary", BOOLOID, -1, InvalidOid);
+    Constraint *def_const = makeNode(Constraint);
+    def_const->contype = CONSTR_DEFAULT;
+    def_const->location = -1;
+    def_const->raw_expr = (Node *) makeStringConst("true", -1);
+    is_primary->constraints = list_make1(def_const);
+
+    List *cols = list_make4(id, ltree, vertex_tbl, phys_map);
+    cols = lappend(cols, is_primary);
+
+    return execute_internal_create_table("neopostgraph", meta_tbl_name, cols, NULL);
 }
 
 void create_metadata_btree_index(char *tbl_name) {
+    /* THE FIX: Added NULL as the 8th argument for where_clause */
     execute_internal_create_index("neopostgraph", tbl_name, psprintf("%s_btree_idx", tbl_name), 
-                                  "id", "btree", true, true);
+                                  "id", "btree", true, true, NULL);
 }
 
 void create_metadata_gist_index(char *tbl_name) {
+    /* Create the AST for: WHERE is_primary */
+    ColumnRef *where_cr = makeNode(ColumnRef);
+    where_cr->fields = list_make1(makeString("is_primary"));
+    where_cr->location = -1;
+
+    /* Pass the where_clause to create a Partial GiST Index */
     execute_internal_create_index("neopostgraph", tbl_name, psprintf("%s_gist_idx", tbl_name), 
-                                  "ltree", "gist", false, false);
+                                  "ltree", "gist", false, false, (Node *) where_cr);
 }
 
 Oid create_label_vertex_physical_mapping_table(char *tbl_name, Oid namespace) {
@@ -627,7 +648,7 @@ execute_internal_create_table(const char *namespace_name, const char *tbl_name, 
 
 static void 
 execute_internal_create_index(const char *namespace_name, const char *tbl_name, const char *idx_name, 
-                              const char *col_name, const char *access_method, bool is_unique, bool is_primary)
+                              const char *col_name, const char *access_method, bool is_unique, bool is_primary, Node *where_clause)
 {
     IndexStmt *idx_stmt = makeNode(IndexStmt);
     idx_stmt->idxname = pstrdup(idx_name);
@@ -641,7 +662,10 @@ execute_internal_create_index(const char *namespace_name, const char *tbl_name, 
     idx_stmt->indexParams = list_make1(elem);
     idx_stmt->indexIncludingParams = NIL;
     idx_stmt->options = NIL;
-    idx_stmt->whereClause = NULL;
+    
+    /* THE FIX: Inject the optional partial index condition */
+    idx_stmt->whereClause = where_clause;
+    
     idx_stmt->excludeOpNames = NIL;
     idx_stmt->idxcomment = NULL;
     idx_stmt->indexOid = InvalidOid;

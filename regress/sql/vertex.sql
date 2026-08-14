@@ -434,10 +434,8 @@ WHERE a.ctid IS NULL
 select remove_vertex_label(1::int8, 2::int4, 21::int4, 'person');
 select id, vertex FROM np_vertex_21_1 WHERE id = 3;
 
-
-
 -- =====================================================================
--- TEST: drop_vlabel (Mass Migration & Non-blocking Catalog Drop)
+-- TEST: drop_vlabel (O(1) Metadata-Only Migration)
 -- =====================================================================
 
 SELECT create_graph('drop_graph', 'public');
@@ -462,52 +460,50 @@ SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::sm
 SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint, '{"name": "Engineering"}'::gtype));
 
 -- Verify initial catalog state
-SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 
 -- =====================================================================
 -- SCENARIO A: Drop a leaf label ('department')
--- Expected: Engineering vertex moves to _.entity.organization
+-- Expected: Engineering vertex STAYS in Table 6, but Table 6 is logically remapped
 -- =====================================================================
 SELECT drop_vlabel('drop_graph', 'department');
 
--- Verify catalog: ID 6 (_.entity.organization.department) should be GONE
-SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+-- Verify catalog: 
+-- ID 4 (_.department) becomes _ with is_primary = f
+-- ID 6 (_.entity.organization.department) becomes _.entity.organization with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 
--- Verify vertex migration: 'Engineering' should now live in _.entity.organization (table np_vertex_22_5)
-SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
-
--- Verify MVCC Preservation: The old physical table should still exist, but be empty for new transactions
-SELECT count(*) FROM np_vertex_22_6;
+-- Verify O(1) Storage: 'Engineering' must STILL live in its original physical table!
+SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 
 
 -- =====================================================================
 -- SCENARIO B: Drop an intermediate label ('organization')
--- Expected: Both 'Acme Corp' and 'Engineering' (which is now in organization)
---           move up to _.entity.
+-- Expected: Both Acme Corp and Engineering logically shift to _.entity without moving
 -- =====================================================================
 SELECT drop_vlabel('drop_graph', 'organization');
 
--- Verify catalog: ID 5 (_.entity.organization) should be GONE
-SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+-- Verify catalog:
+-- ID 3 (_.organization) becomes _ with is_primary = f
+-- ID 5 (_.entity.organization) becomes _.entity with is_primary = f
+-- ID 6 (was _.entity.organization) becomes _.entity with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 
--- Verify vertex migration: 'Acme Corp' and 'Engineering' should now live in _.entity (table np_vertex_22_2)
-SELECT id, vertex FROM np_vertex_22_2 ORDER BY id;
-
--- Verify MVCC Preservation: The old physical table should still exist and not throw an error
-SELECT count(*) FROM np_vertex_22_5;
+-- Verify O(1) Storage: Data is untouched and remains in its respective physical partition
+SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
+SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 
 
 -- =====================================================================
 -- SCENARIO C: Drop the base label ('entity')
--- Expected: All vertices fallback to the root label table (_)
+-- Expected: All vertices fallback to the root label table (_) logically
 -- =====================================================================
 SELECT drop_vlabel('drop_graph', 'entity');
 
--- Verify catalog: ID 2 (_.entity) should be GONE. Only ID 1 (_) should remain.
-SELECT id, ltree, tbl FROM np_vertex_label_22 ORDER BY id;
+-- Verify catalog: ID 2, 5, and 6 all logically fallback to '_' with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 
--- Verify vertex migration: ALL vertices should now live in the root table (np_vertex_22_1)
-SELECT id, vertex FROM np_vertex_22_1 ORDER BY id;
-
--- Verify MVCC Preservation: The old physical table still exists
-SELECT count(*) FROM np_vertex_22_2;
+-- Verify O(1) Storage: ALL vertices still live perfectly in their original physical partitions
+SELECT id, vertex FROM np_vertex_22_2 ORDER BY id;
+SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
+SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;

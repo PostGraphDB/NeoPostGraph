@@ -123,23 +123,23 @@ SELECT * FROM np_graph graph WHERE graph.name = 'edge_graph';
 (1 row)
 
 select * FROM np_edge_label_26;
- id | ltree |     tbl      |       phys_map        
-----+-------+--------------+-----------------------
-  1 | _     | np_edge_26_1 | np_edge_26_1_phys_map
+ id | ltree |     tbl      |       phys_map        | is_primary 
+----+-------+--------------+-----------------------+------------
+  1 | _     | np_edge_26_1 | np_edge_26_1_phys_map | t
 (1 row)
 
 \d+ np_edge_label_26
-                            Table "neopostgraph.np_edge_label_26"
-  Column  |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
-----------+----------+-----------+----------+---------+----------+--------------+-------------
- id       | integer  |           | not null |         | plain    |              | 
- ltree    | ltree    |           | not null |         | extended |              | 
- tbl      | regclass |           | not null |         | plain    |              | 
- phys_map | regclass |           | not null |         | plain    |              | 
+                             Table "neopostgraph.np_edge_label_26"
+   Column   |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+------------+----------+-----------+----------+---------+----------+--------------+-------------
+ id         | integer  |           | not null |         | plain    |              | 
+ ltree      | ltree    |           | not null |         | extended |              | 
+ tbl        | regclass |           | not null |         | plain    |              | 
+ phys_map   | regclass |           | not null |         | plain    |              | 
+ is_primary | boolean  |           |          | true    | plain    |              | 
 Indexes:
     "np_edge_label_26_btree_idx" PRIMARY KEY, btree (id)
-    "np_edge_label_26_gist_idx" gist (ltree)
-    "np_edge_label_26_ltree_key" UNIQUE CONSTRAINT, btree (ltree)
+    "np_edge_label_26_gist_idx" gist (ltree) WHERE is_primary
 Not-null constraints:
     "np_edge_label_26_id_not_null" NOT NULL "id"
     "np_edge_label_26_ltree_not_null" NOT NULL "ltree"

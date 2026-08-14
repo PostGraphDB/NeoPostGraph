@@ -1110,79 +1110,112 @@ drop_vlabel(PG_FUNCTION_ARGS)
 
     int32 graph_id = graph->id;
 
-    /* PASS 1: Native GiST Index Scan */
-    Relation catalog_rel = table_open(graph->vertex_labels, AccessShareLock);
+    /* 1. Open the Vertex Label Catalog for rewriting */
+    Relation catalog_rel = table_open(graph->vertex_labels, RowExclusiveLock);
+    TableScanDesc scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
+    TupleDesc tupdesc = RelationGetDescr(catalog_rel);
+    HeapTuple tuple;
 
-    ScanKeyData skey[1];
-    ScanKeyInit(&skey[0], 2, 14,
-        DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
-        DirectFunctionCall1(ltxtq_in, CStringGetDatum(label_str))
-    );
+    int dropped_count = 0;
 
-    Oid idx_oid = np_relation_id(psprintf("np_vertex_label_%d_gist_idx", graph_id), "index");
-    SysScanDesc cat_scan = systable_beginscan(catalog_rel, idx_oid, true, GetActiveSnapshot(), 1, skey);
-
-    int max_drops = 128;
-    int drop_count = 0;
-    int32 *drop_list = palloc(sizeof(int32) * max_drops);
-
-    HeapTuple cat_tuple;
-    while (HeapTupleIsValid(cat_tuple = systable_getnext(cat_scan))) {
+    /* 2. Sequentially scan the catalog (O(1) relative to entity scale) */
+    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL) {
         bool isnull;
-        int32 match_id = DatumGetInt32(heap_getattr(cat_tuple, 1, RelationGetDescr(catalog_rel), &isnull));
-        
-        if (drop_count >= max_drops) {
-            max_drops *= 2;
-            drop_list = repalloc(drop_list, sizeof(int32) * max_drops);
+        Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
+        char *path = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
+
+        /* Tokenize the ltree path by '.' */
+        char *path_copy = pstrdup(path);
+        char *tokens[256];
+        int num_tokens = 0;
+        char *tok = strtok(path_copy, ".");
+        while (tok != NULL && num_tokens < 256) {
+            tokens[num_tokens++] = tok;
+            tok = strtok(NULL, ".");
         }
-        drop_list[drop_count++] = match_id;
-    }
-    systable_endscan(cat_scan);
-    table_close(catalog_rel, AccessShareLock);
 
-    /* PASS 2: Inline execution passing external_pmap_buf down */
-    for (int i = 0; i < drop_count; i++) {
-        int32 old_label_id = drop_list[i];
+        bool modified = false;
+        bool is_exact = false;
         
-        const label_cache_data *label_cache = search_vertex_label_graph_id_label_id_cache(graph_id, old_label_id);
-        Relation pmap = table_open(label_cache->phys_map, AccessShareLock);
-        
-        BlockNumber nblocks = RelationGetNumberOfBlocks(pmap);
-        uint32 tpp = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
-        
-        for (BlockNumber blk = 0; blk < nblocks; blk++) {
-            Buffer buf = ReadBuffer(pmap, blk);
-            
-            /* Acquire EXCLUSIVE lock once for the entire page */
-            LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-            
-            Page page = BufferGetPage(buf);
-            OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+        StringInfoData new_path;
+        initStringInfo(&new_path);
 
-            for (OffsetNumber off = FirstOffsetNumber; off <= maxoff; off++) {
-                ItemId lp = PageGetItemId(page, off);
-                if (!ItemIdIsNormal(lp)) continue;
-
-                NeoPhysMapRecord *rec = (NeoPhysMapRecord *) PageGetItem(page, lp);
-                if (!ItemPointerIsValid(&rec->v_itemptr)) continue;
-
-                /* THE FIX: Reconstruct the exact VID using the formal inverse function */
-                ItemPointerData pmap_tid;
-                ItemPointerSet(&pmap_tid, blk, off);
-                int64 v_id = (int64) np_tid_to_id(&pmap_tid, tpp);
-                
-                /* Execute inline immediately - pass the exclusively locked buffer straight down */
-                np_internal_remove_vertex_label(v_id, old_label_id, graph_id, label_str, buf);
+        /* 3. Rebuild the ltree path, omitting the dropped label */
+        for (int i = 0; i < num_tokens; i++) {
+            if (strcmp(tokens[i], label_str) == 0 && !modified) {
+                modified = true;
+                /* If the dropped label is the very last token, it is a leaf drop */
+                if (i == num_tokens - 1) {
+                    is_exact = true; 
+                }
+            } else {
+                if (new_path.len > 0) appendStringInfoChar(&new_path, '.');
+                appendStringInfoString(&new_path, tokens[i]);
             }
+        }
+
+        /* If the label dropped was the only label (e.g. _.person), fallback to root _ */
+        if (new_path.len == 0) {
+            appendStringInfoString(&new_path, "_");
+        }
+
+        /* 4. If the path contained the label, update the catalog tuple! */
+        if (modified) {
+            Datum values[10] = {0};
+            bool nulls[10] = {0};
+            bool replaces[10] = {0};
+
+            /* Update Column 2 (Index 1): ltree */
+            values[1] = DirectFunctionCall1(ltree_in, CStringGetDatum(new_path.data));
+            replaces[1] = true;
+
+            /* 
+             * Update Column 10 (Index 9): is_primary
+             * If it was a leaf drop, this table is no longer the primary storage
+             * for its logical path. It becomes a secondary/archived table.
+             */
+            if (is_exact) {
+                values[9] = BoolGetDatum(false);
+                replaces[9] = true;
+            }
+
+            HeapTuple new_tuple = heap_modify_tuple(tuple, tupdesc, values, nulls, replaces);
             
-            /* Safely release when the page is completely migrated */
-            UnlockReleaseBuffer(buf);
+            /* Use our safe table-AM updater to handle partial indexes correctly */
+            np_catalog_update(catalog_rel, tuple, new_tuple);
+            
+            heap_freetuple(new_tuple);
+            dropped_count++;
         }
         
-        table_close(pmap, AccessShareLock);
+        pfree(new_path.data);
+        pfree(path_copy);
+        pfree(path);
     }
 
-    pfree(drop_list);
+    table_endscan(scan);
+    table_close(catalog_rel, RowExclusiveLock);
+
+    /* 5. Remove the structural label from the Global Label Catalog */
+    char *cat_name = psprintf("np_label_catalog_%d", graph_id);
+    Relation global_cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
+    
+    NameData name_val;
+    namestrcpy(&name_val, label_str);
+    ScanKeyData skey[2];
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_val));
+    ScanKeyInit(&skey[1], 2, BTEqualStrategyNumber, F_CHAREQ, CharGetDatum('s'));
+    
+    SysScanDesc global_cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 2, skey);
+    HeapTuple cat_tuple;
+    while (HeapTupleIsValid(cat_tuple = systable_getnext(global_cat_scan))) {
+        CatalogTupleDelete(global_cat_rel, &cat_tuple->t_self);
+    }
+    systable_endscan(global_cat_scan);
+    table_close(global_cat_rel, RowExclusiveLock);
+
+    ereport(NOTICE, (errmsg("Structural label \"%s\" has been dropped. Modified %d physical partition(s) in O(1) time.", label_str, dropped_count)));
+
     pfree(label_str);
     PG_RETURN_VOID();
 }
