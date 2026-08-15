@@ -355,6 +355,14 @@ LANGUAGE C STRICT;
 
 CREATE ACCESS METHOD entity_store TYPE TABLE HANDLER np_entity_store_handler;
 
+CREATE FUNCTION nparraylist_handler(internal)
+RETURNS table_am_handler
+LANGUAGE C
+STRICT
+AS 'MODULE_PATHNAME', 'nparraylist_handler';
+
+CREATE ACCESS METHOD nparraylist TYPE TABLE HANDLER nparraylist_handler;
+
 CREATE FUNCTION rotate_active_linked_list_table(graph_name Name, label_id int)
 RETURNS void 
 LANGUAGE c 

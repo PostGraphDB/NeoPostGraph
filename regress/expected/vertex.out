@@ -566,10 +566,10 @@ select * From np_vertex_21_2_2_linked_list;
 (2 rows)
 
 SELECT * FROM np_vertex_21_2_arraylist;
- id |          prev_table          | prev_itemptr |                                                                  adj_list                                                                   |  next_itemptr  
-----+------------------------------+--------------+---------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | np_vertex_21_2_2_linked_list | (0,1)        | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | np_vertex_21_2_2_linked_list | (0,2)        | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+ id |          prev_table          | prev_itemptr |                                                                  adj_list                                                                   | next_itemptr 
+----+------------------------------+--------------+---------------------------------------------------------------------------------------------------------------------------------------------+--------------
+  1 | np_vertex_21_2_2_linked_list | (0,1)        | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | np_vertex_21_2_2_linked_list | (0,2)        | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select rotate_active_linked_list_table('vertex_graph', 2);
@@ -619,10 +619,10 @@ select * from np_vertex_21_2_linked_list_meta;
 (3 rows)
 
 SELECT * FROM np_vertex_21_2_arraylist;
- id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
-----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | -          | (4294967295,0) | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | -          | (4294967295,0) | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+ id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
+----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
+  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select compact_oldest_linked_list_table('vertex_graph', 2);
@@ -785,10 +785,10 @@ select * From np_vertex_21_3_2_linked_list;
 (0 rows)
 
 SELECT * FROM np_vertex_21_3_arraylist;
- id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
-----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | -          | (4294967295,0) | [{"edge_id": 5, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 820, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 821, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | -          | (4294967295,0) | [{"edge_id": 5, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 820, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 821, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+ id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
+----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
+  1 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 820, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 821, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 820, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 821, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 SELECT * FROM public.np_edge_21_1;
@@ -1159,10 +1159,10 @@ select * From np_vertex_21_2_2_linked_list;
 (2 rows)
 
 SELECT * FROM np_vertex_21_2_arraylist;
- id | prev_table |  prev_itemptr  |                                                                                                                                        adj_list                                                                                                                                        |  next_itemptr  
-----+------------+----------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------
-  1 | -          | (4294967295,0) | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
-  2 | -          | (4294967295,0) | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | (4294967295,0)
+ id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
+----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
+  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select set_vertex_label(2, 2, 21, 'missing_label');

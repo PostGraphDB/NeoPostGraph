@@ -814,7 +814,7 @@ create_vertex_label_linked_list_table(char *tbl_name, Oid namespace)
     wrapper->stmt_location = -1;
     wrapper->stmt_len = 0;
 
-    ProcessUtility(wrapper, "(generated arraylist CREATE TABLE)",
+    ProcessUtility(wrapper, "(generated linked list CREATE TABLE)",
                    false, PROCESS_UTILITY_SUBCOMMAND, NULL, NULL,
                    None_Receiver, NULL);
 
@@ -886,7 +886,7 @@ create_vertex_label_arraylist_table(char *tbl_name, Oid namespace)
         makeColumnDef("next_itemptr", TIDOID, -1, InvalidOid)
     );
 
-    create_stmt->accessMethod = NULL;
+    create_stmt->accessMethod = "nparraylist";
     create_stmt->inhRelations = NIL;
     create_stmt->partbound = NULL;
     create_stmt->ofTypename = NULL;
@@ -912,9 +912,6 @@ create_vertex_label_arraylist_table(char *tbl_name, Oid namespace)
 
     return get_relname_relid(tbl_name, namespace);
 }
-
-
-
 
 Oid create_vertex_label_metadata_table(char *meta_tbl_name)
 {
