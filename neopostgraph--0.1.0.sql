@@ -329,10 +329,15 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
-CREATE OR REPLACE FUNCTION set_edge_label(edge_id bigint, label_id integer, graph_id integer, label_name text)
+CREATE FUNCTION set_edge_label(edge_id bigint, label_id integer, graph_id integer, label_name text)
 RETURNS edge
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'set_edge_label';
+
+CREATE FUNCTION remove_edge_label(edge_id bigint, label_id integer, graph_id integer, label_name text)
+RETURNS edge
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'remove_edge_label';
 
 --
 --
