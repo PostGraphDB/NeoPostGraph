@@ -44,4 +44,7 @@ enforce_and_insert_label_catalog(Relation cat_rel, Relation idx_rel, char *label
 Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace);
 void np_catalog_update(Relation rel, HeapTuple old_tup, HeapTuple new_tup);
 
+int32 create_elabel_internal(const char *graph_name, const char *new_label_str, const char *namespace_name, Datum *out_id);
+int32 merge_elabels_internal(const char *graph_name, int32 current_label_id, int32 base_label_id, const char *namespace_name);
+
 #endif

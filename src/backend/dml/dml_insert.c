@@ -266,7 +266,7 @@ np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e)
 
     const label_cache_data *edge_label = search_edge_label_graph_id_label_id_cache(e->graph_id, e->label_id);
 
-    if (!edge_label || !OidIsValid(edge_label->vertex_tbl)) {
+    if (!edge_label) {
         ereport(ERROR, (errmsg("Edge label table not found")));
     }
 

@@ -81,7 +81,9 @@ static int32
 resolve_reduced_target_label(int32 graph_id, int32 current_label_id, const char *label_to_remove, 
                              const graph_cache_data *graph_cache, const char *raw_current_ltree);
 static int32 create_vlabel_from_path_internal(int32 graph_id, const char *ltree_path);
-
+static int32 
+resolve_or_create_target_edge_label(int32 graph_id, int32 current_label_id, const char *new_label_str, 
+                                    const graph_cache_data *graph_cache, const char *raw_current_ltree);
 /* =====================================================================
  * MIGRATION STRUCTS & HELPER SIGNATURES
  * ===================================================================== */
@@ -1225,4 +1227,205 @@ drop_vlabel(PG_FUNCTION_ARGS)
 
     pfree(label_str);
     PG_RETURN_VOID();
+}
+
+
+PG_FUNCTION_INFO_V1(set_edge_label);
+Datum
+set_edge_label(PG_FUNCTION_ARGS)
+{
+    int64 edge_id = PG_GETARG_INT64(0);
+    int32 current_label_id = PG_GETARG_INT32(1);
+    int32 graph_id = PG_GETARG_INT32(2);
+    char *new_label_str = text_to_cstring(PG_GETARG_TEXT_PP(3));
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    if (strchr(new_label_str, '.') != NULL)
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("labels cannot contain dots.")));
+
+    const graph_cache_data *graph_cache = search_graph_id_cache(graph_id);
+    const label_cache_data *current_label_cache = search_edge_label_graph_id_label_id_cache(graph_id, current_label_id);
+    
+    if (!current_label_cache) 
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT), errmsg("edge label %d not found", current_label_id)));
+
+    /* 1. Resolve Target Edge Label */
+    char *raw_current_ltree = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(current_label_cache->label)));
+    
+    int32 target_label_id = resolve_or_create_target_edge_label(graph_id, current_label_id, new_label_str, graph_cache, raw_current_ltree);
+    
+    if (target_label_id == current_label_id) {
+        pfree(raw_current_ltree);
+        PG_RETURN_NULL();
+    }
+    pfree(raw_current_ltree);
+
+    /* 2. Fetch Old Edge Payload via Edge Phys Map */
+    Oid safe_old_physmap_oid = current_label_cache->phys_map;
+    Oid safe_old_edge_tbl_oid = current_label_cache->vertex_tbl; // Make sure this matches your edge cache struct field
+
+    Relation old_physmap_rel = table_open(safe_old_physmap_oid, AccessShareLock);
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(edge_id, pmap_tuples_per_page, &phys_map_tid);
+
+    Buffer pmap_buf = ReadBuffer(old_physmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    NeoEdgePhysMapRecord pmap_rec = *((NeoEdgePhysMapRecord *) PageGetItem(BufferGetPage(pmap_buf), 
+                                      PageGetItemId(BufferGetPage(pmap_buf), ItemPointerGetOffsetNumber(&phys_map_tid))));
+    UnlockReleaseBuffer(pmap_buf);
+    
+    Relation old_e_rel = table_open(safe_old_edge_tbl_oid, AccessShareLock);
+    Buffer old_e_buf = ReadBuffer(old_e_rel, ItemPointerGetBlockNumber(&pmap_rec.e_itemptr));
+    LockBuffer(old_e_buf, BUFFER_LOCK_SHARE);
+    
+    NPEntityTupleHeader old_e_hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(old_e_buf), 
+                                    PageGetItemId(BufferGetPage(old_e_buf), ItemPointerGetOffsetNumber(&pmap_rec.e_itemptr)));
+
+    /* Clone the payload in memory so we can safely mutate its label ID */
+    edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_e_hdr->serialized_entity));
+    
+    /* Safely cache the vertex routing info from the payload BEFORE we tombstone it */
+    int64 start_v_id = new_unpacked->start_id;
+    int32 start_v_label = new_unpacked->start_label;
+    int64 end_v_id = new_unpacked->end_id;
+    int32 end_v_label = new_unpacked->end_label;
+
+    UnlockReleaseBuffer(old_e_buf);
+    
+    /* VERY IMPORTANT: Close relations so delete_edge doesn't self-deadlock */
+    table_close(old_e_rel, AccessShareLock);
+    table_close(old_physmap_rel, AccessShareLock);
+
+    /* 3. Update Edge Label ID in memory */
+    new_unpacked->label_id = target_label_id;
+
+    /* 4. Tombstone the Old Edge AND its Adjacency Links */
+    // This safely handles the Entity table, the Phys Map, AND the vertex linked lists.
+    np_internal_delete_edge(graph_id, current_label_id, edge_id, cid, current_fxid);
+
+    /* 5. Force Postgres to recognize the tombstone and newly forged tables */
+    CommandCounterIncrement();
+    AcceptInvalidationMessages();
+
+    /* 6. Fetch Start and End Vertices (MUST BE DONE AFTER delete_edge to avoid stale lists!) */
+    vertex *start_v = np_internal_fetch_vertex(graph_id, start_v_id, start_v_label);
+    vertex *end_v = np_internal_fetch_vertex(graph_id, end_v_id, end_v_label);
+
+    /* 7. Insert New Edge Payload & Wire Adjacency Lists */
+    np_internal_insert_edge(start_v, end_v, new_unpacked); 
+
+    pfree(start_v);
+    pfree(end_v);
+
+    PG_RETURN_DATUM(PointerGetDatum(new_unpacked));
+}
+static int32 
+resolve_or_create_target_edge_label(int32 graph_id, int32 current_label_id, const char *new_label_str, 
+                                    const graph_cache_data *graph_cache, const char *raw_current_ltree)
+{
+    char *base_ltree_str = psprintf("_.%s", new_label_str);
+    Datum base_ltree_datum = DirectFunctionCall1(ltree_in, CStringGetDatum(base_ltree_str));
+    int32 base_label_id = -1;
+
+    /* 1. Find or Create Base Edge Label */
+    PushActiveSnapshot(GetLatestSnapshot());
+    Relation meta_rel = table_open(graph_cache->edge_labels, AccessShareLock);
+    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+    HeapTuple tuple;
+    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+        bool isnull;
+        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, base_ltree_datum)) == 0) {
+            base_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+            break;
+        }
+    }
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+    PopActiveSnapshot();
+
+    if (base_label_id == -1) {
+        base_label_id = create_elabel_internal(NameStr(graph_cache->name), new_label_str, NULL, NULL); 
+        CommandCounterIncrement();
+    }
+
+    /* 2. Determine target path */
+    char *merged_ltree_str = NULL;
+
+    if (strcmp(raw_current_ltree, "_") == 0) {
+        merged_ltree_str = pstrdup(base_ltree_str);
+    } else {
+        bool already_has_label = false;
+        char *path_copy = pstrdup(raw_current_ltree);
+        char *token = strtok(path_copy, ".");
+        while (token != NULL) {
+            if (strcmp(token, new_label_str) == 0) { 
+                already_has_label = true; 
+                break; 
+            }
+            token = strtok(NULL, ".");
+        }
+        pfree(path_copy);
+
+        if (already_has_label) {
+            pfree(base_ltree_str);
+            return current_label_id;
+        }
+        else merged_ltree_str = psprintf("%s.%s", raw_current_ltree, new_label_str);
+    }
+    pfree(base_ltree_str);
+
+    /* 3. Find target edge label */
+    Datum target_ltree_datum = DirectFunctionCall1(ltree_in, CStringGetDatum(merged_ltree_str));
+    int32 target_label_id = -1;
+    
+    PushActiveSnapshot(GetLatestSnapshot());
+    meta_rel = table_open(graph_cache->edge_labels, AccessShareLock);
+    scan = systable_beginscan(meta_rel, InvalidOid, false, GetActiveSnapshot(), 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
+        bool isnull;
+        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (DatumGetInt32(DirectFunctionCall2(ltree_cmp, ltree_val, target_ltree_datum)) == 0) {
+            target_label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+            break;
+        }
+    }
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+    PopActiveSnapshot();
+
+    /* 4. FORGE TARGET DIRECTLY (Bypass the syscache entirely) */
+    if (target_label_id == -1) {
+        target_label_id = (int32) DatumGetInt64(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(graph_cache->edge_id_seq)));
+        Oid edge_tbl = create_edge_tables(graph_cache->id, target_label_id, graph_cache->namespace);
+        Oid phys_map = create_label_edge_physical_mapping_table(
+                            psprintf("np_edge_%d_%d_phys_map", graph_cache->id, target_label_id), graph_cache->namespace);
+
+        /* Write the EXACT computed string directly into the catalog */
+        insert_label(
+            psprintf("np_edge_label_%d", graph_cache->id),
+            target_ltree_datum,
+            target_label_id,
+            edge_tbl,
+            phys_map
+        );
+
+        CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
+        char seq_name[NAMEDATALEN];
+        snprintf(seq_name, NAMEDATALEN, "np_edge_id_seq_%d_%d", graph_cache->id, target_label_id);
+        seq_stmt->sequence = makeRangeVar("neopostgraph", seq_name, -1);
+        seq_stmt->options = NIL;
+        seq_stmt->ownerId = GetUserId();
+        seq_stmt->for_identity = false;
+        seq_stmt->if_not_exists = false;
+
+        DefineSequence(NULL, seq_stmt);
+        CommandCounterIncrement();
+    }
+    
+    pfree(merged_ltree_str);
+    return target_label_id;
 }

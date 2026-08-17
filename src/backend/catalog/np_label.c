@@ -223,49 +223,27 @@ pfree(clean_array);
     table_close(pmap_rel, RowExclusiveLock);
 }
 
-
-PG_FUNCTION_INFO_V1(create_elabel);
-Datum create_elabel(PG_FUNCTION_ARGS)
+int32
+create_elabel_internal(const char *graph_name, const char *new_label_str, const char *namespace_name, Datum *out_id)
 {
-    // fetch the namespace the graph is created in
     Oid namespace;
-    if (PG_ARGISNULL(2)) {
+    if (namespace_name) {
+        namespace = get_namespace_oid(namespace_name, false);
+    } else {
         List *search_path = fetch_search_path(false);
         if (list_length(search_path) < 1)
             ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                            errmsg("create_vlabel requires a search path when namespace is not specified")));
-
+                            errmsg("create_elabel requires a search path when namespace is not specified")));
         namespace = linitial_oid(search_path);
-    } else if (!OidIsValid(namespace = get_namespace_oid(TextDatumGetCString(PG_GETARG_DATUM(2)), true))) {
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("namespace \"%s\" does not exist", TextDatumGetCString(PG_GETARG_DATUM(2)))));
     }
-
-    // validate the label
-    if (PG_ARGISNULL(1))
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("ltree must not be NULL")));
-
-    // fetch the graph name
-    if (PG_ARGISNULL(0))
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("graph name must not be NULL")));
-    char *graph_name = NameStr(*PG_GETARG_NAME(0));
 
     graph_cache_data *entry = search_graph_name_namespace_cache(graph_name, namespace);
     if (!entry)
-        ereport(ERROR,
-                (errcode(ERRCODE_UNDEFINED_SCHEMA),
-                errmsg("graph \"%s\" does not exist \"%s\".", graph_name, get_namespace_name(namespace)),
-                PG_ARGISNULL(1) ?
-                    errhint("When namespace is not specified, the graph is created in the first namespace in the search path. Consider changing the search path or specifying a namespace explicitly.") :
-                    errhint("Use a different graph name or create the graph.")
-                ));
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA), errmsg("graph \"%s\" does not exist", graph_name)));
 
-    Oid label_id = DatumGetObjectId(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->edge_id_seq)));
+    int32 label_id = (int32) DatumGetInt64(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(entry->edge_id_seq)));
     Oid edge_tbl = create_edge_tables(entry->id, label_id, namespace);
     
-    /* NEW: Spawn the router table */
     Oid phys_map = create_label_edge_physical_mapping_table(
                         psprintf("np_edge_%d_%d_phys_map", entry->id, label_id), namespace);
     
@@ -273,11 +251,11 @@ Datum create_elabel(PG_FUNCTION_ARGS)
         psprintf("np_edge_label_%d", entry->id),
         DirectFunctionCall2(ltree_addltree,
             DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)),
-            PG_GETARG_DATUM(1)
+            DirectFunctionCall1(ltree_in, CStringGetDatum(new_label_str))
         ),
         label_id,
         edge_tbl,
-        phys_map /* Pass it to the catalog */
+        phys_map
     );
 
     CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
@@ -292,7 +270,123 @@ Datum create_elabel(PG_FUNCTION_ARGS)
     DefineSequence(NULL, seq_stmt);
     CommandCounterIncrement();
 
+    if (out_id) *out_id = Int32GetDatum(label_id);
+    return label_id;
+}
+
+PG_FUNCTION_INFO_V1(create_elabel);
+Datum create_elabel(PG_FUNCTION_ARGS)
+{
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label string must not be NULL")));
+
+    char *graph_name = NameStr(*PG_GETARG_NAME(0));
+    
+    /* Safely detoast the label string */
+    text *label_text = PG_GETARG_TEXT_PP(1);
+    char *new_label_str = text_to_cstring(label_text);
+    
+    char *namespace_name = NULL;
+    if (!PG_ARGISNULL(2)) {
+        namespace_name = TextDatumGetCString(PG_GETARG_DATUM(2));
+    }
+
+    create_elabel_internal(graph_name, new_label_str, namespace_name, NULL);
+    
+    pfree(new_label_str);
     ereport(NOTICE, (errmsg("elabel \"%s\" has been created", graph_name)));
+
+    PG_RETURN_VOID();
+}
+
+int32
+merge_elabels_internal(const char *graph_name, int32 current_label_id, int32 base_label_id, const char *namespace_name)
+{
+    Oid namespace;
+    if (namespace_name) {
+        namespace = get_namespace_oid(namespace_name, false);
+    } else {
+        List *search_path = fetch_search_path(false);
+        namespace = linitial_oid(search_path);
+    }
+
+    graph_cache_data *graph_cache = search_graph_name_namespace_cache(graph_name, namespace);
+    if (!graph_cache)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA), errmsg("graph \"%s\" does not exist", graph_name)));
+
+    const label_cache_data *current_label = search_edge_label_graph_id_label_id_cache(graph_cache->id, current_label_id);
+    const label_cache_data *base_label = search_edge_label_graph_id_label_id_cache(graph_cache->id, base_label_id);
+
+    if (!current_label || !base_label)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT), errmsg("One or more edge labels do not exist for merge")));
+
+    /* Extract the exact string paths (e.g. '_.knows' and '_.colleague') */
+    char *current_path = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(current_label->label)));
+    char *base_path = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(base_label->label)));
+
+    /* Strip the root '_.' from the base path to concatenate it cleanly */
+    char *clean_base = strstr(base_path, "_.");
+    if (clean_base) clean_base += 2;
+    else clean_base = base_path;
+
+    char *merged_path_str = psprintf("%s.%s", current_path, clean_base);
+    Datum merged_ltree = DirectFunctionCall1(ltree_in, CStringGetDatum(merged_path_str));
+
+    int32 new_label_id = (int32) DatumGetInt64(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(graph_cache->edge_id_seq)));
+    Oid edge_tbl = create_edge_tables(graph_cache->id, new_label_id, namespace);
+    Oid phys_map = create_label_edge_physical_mapping_table(
+                        psprintf("np_edge_%d_%d_phys_map", graph_cache->id, new_label_id), namespace);
+
+    /* Insert directly with the pre-merged ltree */
+    insert_label(
+        psprintf("np_edge_label_%d", graph_cache->id),
+        merged_ltree,
+        new_label_id,
+        edge_tbl,
+        phys_map
+    );
+
+    CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
+    char seq_name[NAMEDATALEN];
+    snprintf(seq_name, NAMEDATALEN, "np_edge_id_seq_%d_%d", graph_cache->id, new_label_id);
+    seq_stmt->sequence = makeRangeVar("neopostgraph", seq_name, -1);
+    seq_stmt->options = NIL;
+    seq_stmt->ownerId = GetUserId();
+    seq_stmt->for_identity = false;
+    seq_stmt->if_not_exists = false;
+
+    DefineSequence(NULL, seq_stmt);
+    CommandCounterIncrement();
+
+    pfree(current_path);
+    pfree(base_path);
+    pfree(merged_path_str);
+
+    return new_label_id;
+}
+
+PG_FUNCTION_INFO_V1(merge_elabels);
+Datum merge_elabels(PG_FUNCTION_ARGS)
+{
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1) || PG_ARGISNULL(2))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label IDs must not be NULL")));
+
+    char *graph_name = NameStr(*PG_GETARG_NAME(0));
+    int32 current_label_id = PG_GETARG_INT32(1);
+    int32 base_label_id = PG_GETARG_INT32(2);
+    
+    char *namespace_name = NULL;
+    if (PG_NARGS() > 3 && !PG_ARGISNULL(3)) {
+        namespace_name = TextDatumGetCString(PG_GETARG_DATUM(3));
+    }
+
+    merge_elabels_internal(graph_name, current_label_id, base_label_id, namespace_name);
+    
+    ereport(NOTICE, (errmsg("Merged elabels %d and %d for graph \"%s\"", current_label_id, base_label_id, graph_name)));
 
     PG_RETURN_VOID();
 }

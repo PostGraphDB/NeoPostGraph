@@ -293,6 +293,16 @@ RETURNS void
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION create_elabel(graph_name Name, label text, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c 
+AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION merge_elabels(graph_name Name, current_label_id int4, base_label_id int4, namespace text DEFAULT NULL)
+RETURNS void 
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 -- DML Commands
 --
@@ -318,6 +328,11 @@ CREATE FUNCTION delete_edge(id int8, labelid int4, graphid int4)
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
+
+CREATE OR REPLACE FUNCTION set_edge_label(edge_id bigint, label_id integer, graph_id integer, label_name text)
+RETURNS edge
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'set_edge_label';
 
 --
 --

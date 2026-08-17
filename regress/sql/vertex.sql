@@ -568,7 +568,6 @@ FROM np_vertex_21_2_arraylist
 ORDER BY id;
 
 -- 6. Verify the physical map points to the NEW arraylist CTID
--- (Once we build in-place updates, this e_itemptr won't change!)
 SELECT v_itemptr, e_tbl_id, e_itemptr
 FROM np_vertex_21_2_phys_map
 ORDER BY v_itemptr;
