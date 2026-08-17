@@ -1180,9 +1180,9 @@ select * FROM np_vertex_21_10;
 (1 row)
 
 select * FROM np_vertex_21_10_phys_map;
- v_itemptr | e_tbl_id |   e_itemptr    |   a_itemptr    
------------+----------+----------------+----------------
- (0,1)     | -        | (4294967295,0) | (4294967295,0)
+ v_itemptr |           e_tbl_id            | e_itemptr |   a_itemptr    
+-----------+-------------------------------+-----------+----------------
+ (0,1)     | np_vertex_21_10_1_linked_list | (0,2)     | (4294967295,0)
 (1 row)
 
 select * FROM np_vertex_21_10_linked_list_meta;
@@ -1192,9 +1192,11 @@ select * FROM np_vertex_21_10_linked_list_meta;
 (1 row)
 
 select * from np_vertex_21_10_1_linked_list;
- id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
-----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
-(0 rows)
+ id | edge_lid | dir  | owner_id | other_id | other_lid |           next_tbl            |  next_itemptr  |           prev_tbl            |  prev_itemptr  
+----+----------+------+----------+----------+-----------+-------------------------------+----------------+-------------------------------+----------------
+  4 |        1 | \x01 |        1 |        1 |         2 | -                             | (4294967295,0) | np_vertex_21_10_1_linked_list | (0,2)
+  3 |        1 | \x01 |        1 |        1 |         2 | np_vertex_21_10_1_linked_list | (0,1)          | -                             | (4294967295,0)
+(2 rows)
 
 select * FROM np_vertex_21_10_linked_list_seq;
  last_value | log_cnt | is_called 
@@ -1253,21 +1255,27 @@ select id, vertex FROM np_vertex_21_2 WHERE id = 4;
 
 -- 3. Remove label to a NON-EXISTENT target path (Charlie: _.person.employee.engineer -> _.person.engineer)
 select remove_vertex_label(1::int8, 6::int4, 21::int4, 'employee');
-ERROR:  Could not find sequence for graph 21 labels
+                                 remove_vertex_label                                 
+-------------------------------------------------------------------------------------
+ {"id": 1, "label": "person:engineer", "properties": {"age": 36, "name": "Charlie"}}
+(1 row)
+
 select id, ltree, tbl FROM np_vertex_label_21 WHERE ltree = '_.person.engineer';
- id | ltree | tbl 
-----+-------+-----
-(0 rows)
+ id |       ltree       |       tbl       
+----+-------------------+-----------------
+ 11 | _.person.engineer | np_vertex_21_11
+(1 row)
 
 select * FROM np_vertex_21_11;
-ERROR:  relation "np_vertex_21_11" does not exist
-LINE 1: select * FROM np_vertex_21_11;
-                      ^
-select * FROM np_vertex_21_6;
- id |                                              vertex                                               
-----+---------------------------------------------------------------------------------------------------
-  1 | {"id": 1, "label": "person:employee:engineer:FREE", "properties": {"age": 36, "name": "Charlie"}}
+ id |                                       vertex                                        
+----+-------------------------------------------------------------------------------------
+  1 | {"id": 1, "label": "person:engineer", "properties": {"age": 36, "name": "Charlie"}}
 (1 row)
+
+select * FROM np_vertex_21_6;
+ id | vertex 
+----+--------
+(0 rows)
 
 -- =====================================================================
 -- TEST: Validate Phys Map Synchronization after Compaction
@@ -1284,12 +1292,12 @@ FROM np_vertex_21_2_arraylist;
 -- Expose the pointers in the physical map
 SELECT v_itemptr, e_tbl_id, e_itemptr
 FROM np_vertex_21_2_phys_map;
-   v_itemptr    |         e_tbl_id         |   e_itemptr    
-----------------+--------------------------+----------------
- (0,3)          | np_vertex_21_2_arraylist | (0,3)
- (4294967295,0) | np_vertex_21_2_arraylist | (0,4)
- (0,4)          | -                        | (4294967295,0)
- (0,5)          | -                        | (4294967295,0)
+   v_itemptr    |           e_tbl_id           |   e_itemptr    
+----------------+------------------------------+----------------
+ (0,3)          | np_vertex_21_2_6_linked_list | (0,5)
+ (4294967295,0) | np_vertex_21_2_arraylist     | (0,4)
+ (0,4)          | -                            | (4294967295,0)
+ (0,5)          | np_vertex_21_2_6_linked_list | (0,6)
 (4 rows)
 
 -- (Strict Validation) This must return 0 rows. 
@@ -1301,7 +1309,9 @@ WHERE a.ctid IS NULL
   AND p.e_itemptr::text != '(4294967295,0)';
  v_itemptr | broken_pointer 
 -----------+----------------
-(0 rows)
+ (0,3)     | (0,5)
+ (0,5)     | (0,6)
+(2 rows)
 
 -- 4. Remove the ONLY remaining label (Alex: _.person -> _)
 select remove_vertex_label(1::int8, 2::int4, 21::int4, 'person');
@@ -1510,3 +1520,225 @@ SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
   1 | {"id": 1, "label": "", "properties": {"name": "Engineering"}}
 (1 row)
 
+-- =====================================================================
+-- TEST: Compacting NEW edges into an EXISTING Adjacency List
+-- =====================================================================
+-- 1. Insert new edges to vertices that already have compacted arraylists.
+-- (Vertex 1 and 2 in table 2 of 'vertex_graph')
+SELECT insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{"status": "new_edge_A"}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+SELECT insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{"status": "new_edge_B"}'::gtype)
+  );
+ insert_edge 
+-------------
+ 
+(1 row)
+
+-- 2. Check the physical map before rotation. 
+-- It should currently point to the old arraylist block.
+SELECT v_itemptr, e_tbl_id, e_itemptr 
+FROM np_vertex_21_2_phys_map 
+ORDER BY v_itemptr;
+   v_itemptr    |           e_tbl_id           |   e_itemptr    
+----------------+------------------------------+----------------
+ (0,4)          | -                            | (4294967295,0)
+ (0,5)          | np_vertex_21_2_6_linked_list | (0,8)
+ (4294967295,0) | np_vertex_21_2_6_linked_list | (0,11)
+ (4294967295,0) | np_vertex_21_2_6_linked_list | (0,12)
+(4 rows)
+
+SELECT *
+FROM np_vertex_21_2_1_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid | next_tbl |  next_itemptr  |           prev_tbl           | prev_itemptr 
+----+----------+------+----------+----------+-----------+----------+----------------+------------------------------+--------------
+  3 |        1 |      |        1 |        2 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,1)
+  3 |        1 | \x01 |        2 |        1 |         2 | -        | (4294967295,0) | np_vertex_21_2_2_linked_list | (0,2)
+(2 rows)
+
+SELECT *
+FROM np_vertex_21_2_2_linked_list;
+ id | edge_lid | dir  | owner_id | other_id | other_lid |         next_tbl         | next_itemptr | prev_tbl |  prev_itemptr  
+----+----------+------+----------+----------+-----------+--------------------------+--------------+----------+----------------
+  4 |        1 |      |        1 |        2 |         2 | np_vertex_21_2_arraylist | (0,1)        | -        | (4294967295,0)
+  4 |        1 | \x01 |        2 |        1 |         2 | np_vertex_21_2_arraylist | (0,2)        | -        | (4294967295,0)
+(2 rows)
+
+SELECT *
+FROM np_vertex_21_2_3_linked_list;
+ id | edge_lid | dir | owner_id | other_id | other_lid | next_tbl | next_itemptr | prev_tbl | prev_itemptr 
+----+----------+-----+----------+----------+-----------+----------+--------------+----------+--------------
+(0 rows)
+
+SELECT id, adj_list 
+FROM np_vertex_21_2_arraylist 
+ORDER BY id;
+ id |                                                                                                                                  adj_list                                                                                                                                  
+----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+  2 | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+(2 rows)
+
+-- 3. Rotate the active linked list so the new edges can be compacted
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+-- 4. Compact the inactive linked list into the existing arraylist
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+-- 5. Verify the arraylist has accumulated ALL edges in a single varlena struct
+SELECT id, adj_list 
+FROM np_vertex_21_2_arraylist 
+ORDER BY id;
+ id |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       adj_list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 7, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 850, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 851, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+  2 | [{"edge_id": 7, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 850, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 851, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+  4 | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}]
+(3 rows)
+
+-- 6. Verify the physical map points to the NEW arraylist CTID
+-- (Once we build in-place updates, this e_itemptr won't change!)
+SELECT v_itemptr, e_tbl_id, e_itemptr
+FROM np_vertex_21_2_phys_map
+ORDER BY v_itemptr;
+   v_itemptr    |         e_tbl_id         |   e_itemptr    
+----------------+--------------------------+----------------
+ (0,4)          | -                        | (4294967295,0)
+ (0,5)          | np_vertex_21_2_arraylist | (0,5)
+ (4294967295,0) | np_vertex_21_2_arraylist | (0,6)
+ (4294967295,0) | np_vertex_21_2_arraylist | (0,7)
+(4 rows)
+
+-- =====================================================================
+-- TEST: Supernode Block-Chaining (Maximized 8KB Page Chunks)
+-- =====================================================================
+-- 1. Create a supernode by inserting 200 edges into Vertex 1
+SELECT count(insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
+      '{"status": "mass_insert"}'::gtype)
+  )) FROM generate_series(1, 200);
+ count 
+-------
+   200
+(1 row)
+
+-- 2. Rotate and Compact
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+-- 3. Verify the doubly-linked chain was created! 
+-- We should see multiple arraylist blocks for owner_id = 1, packed to the absolute brim.
+SELECT ctid, id, prev_itemptr, next_itemptr, octet_length(adj_list::text) AS payload_size
+FROM np_vertex_21_2_arraylist 
+WHERE id = 1
+ORDER BY ctid;
+ ctid  | id | prev_itemptr | next_itemptr | payload_size 
+-------+----+--------------+--------------+--------------
+ (1,1) |  1 |              | (2,1)        |        21763
+ (2,1) |  1 | (1,1)        |              |         7421
+(2 rows)
+
+-- =====================================================================
+-- TEST: Edge Migration from Supernode (Chained Arraylist Relabeling)
+-- =====================================================================
+-- 1. Grab sequence values safely
+CREATE TEMP TABLE supernode_relabel_ids (role text, v_id int8);
+INSERT INTO supernode_relabel_ids VALUES ('SuperA', nextval('np_vertex_id_seq_21_2'));
+INSERT INTO supernode_relabel_ids VALUES ('TargetB', nextval('np_vertex_id_seq_21_2'));
+-- 2. Create the vertices
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+-- 3. Insert 200 edges to force block-chaining!
+SELECT count(insert_edge(
+  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
+  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
+      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
+      '{"test": "supernode_relabel"}'::gtype)
+)) FROM generate_series(1, 200);
+ count 
+-------
+   200
+(1 row)
+
+-- 4. Compact the edges into the chunked bare-metal TAM arraylists
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+ rotate_active_linked_list_table 
+---------------------------------
+ 
+(1 row)
+
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+ compact_oldest_linked_list_table 
+----------------------------------
+ 
+(1 row)
+
+-- 5. Execute the Relabel! 
+-- If migrate_vertex_edges fails to follow `next_itemptr`, this will either
+-- drop 56 edges into the void, or infinite loop/crash.
+SELECT set_vertex_label(
+    (SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 
+    2::int4, 21::int4, 'superLabel'
+) IS NOT NULL AS supernode_migration_successful;
+NOTICE:  vlabel "superLabel" has been created
+NOTICE:  Merged vlabel "_.person.superLabel" has been created
+ supernode_migration_successful 
+--------------------------------
+ t
+(1 row)
+
+-- Clean up
+DROP TABLE supernode_relabel_ids;

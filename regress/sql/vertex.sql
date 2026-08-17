@@ -330,7 +330,6 @@ select * From np_vertex_21_1_2_linked_list;
 SELECT * FROM np_vertex_21_1_arraylist;
 
 
-
 select * FROM np_vertex_label_21;
 SELECT create_vlabel('vertex_graph', 'person', ARRAY['EMPLOYEED', 'FREE']);
 select * FROM np_vertex_label_21;
@@ -390,7 +389,6 @@ select * FROM np_vertex_21_10_annotations;
 
 
 select * FROM np_vertex_label_21;
-
 
 
 -- =====================================================================
@@ -507,3 +505,136 @@ SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 SELECT id, vertex FROM np_vertex_22_2 ORDER BY id;
 SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
 SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
+
+
+
+-- =====================================================================
+-- TEST: Compacting NEW edges into an EXISTING Adjacency List
+-- =====================================================================
+
+-- 1. Insert new edges to vertices that already have compacted arraylists.
+-- (Vertex 1 and 2 in table 2 of 'vertex_graph')
+SELECT insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{"status": "new_edge_A"}'::gtype)
+  );
+
+SELECT insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
+      '{"status": "new_edge_B"}'::gtype)
+  );
+
+-- 2. Check the physical map before rotation. 
+-- It should currently point to the old arraylist block.
+SELECT v_itemptr, e_tbl_id, e_itemptr 
+FROM np_vertex_21_2_phys_map 
+ORDER BY v_itemptr;
+
+SELECT *
+FROM np_vertex_21_2_1_linked_list;
+
+SELECT *
+FROM np_vertex_21_2_2_linked_list;
+
+SELECT *
+FROM np_vertex_21_2_3_linked_list;
+
+
+
+SELECT id, adj_list 
+FROM np_vertex_21_2_arraylist 
+ORDER BY id;
+
+
+-- 3. Rotate the active linked list so the new edges can be compacted
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+
+-- 4. Compact the inactive linked list into the existing arraylist
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+
+-- 5. Verify the arraylist has accumulated ALL edges in a single varlena struct
+SELECT id, adj_list 
+FROM np_vertex_21_2_arraylist 
+ORDER BY id;
+
+-- 6. Verify the physical map points to the NEW arraylist CTID
+-- (Once we build in-place updates, this e_itemptr won't change!)
+SELECT v_itemptr, e_tbl_id, e_itemptr
+FROM np_vertex_21_2_phys_map
+ORDER BY v_itemptr;
+
+
+-- =====================================================================
+-- TEST: Supernode Block-Chaining (Maximized 8KB Page Chunks)
+-- =====================================================================
+
+-- 1. Create a supernode by inserting 200 edges into Vertex 1
+SELECT count(insert_edge(
+  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
+  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
+      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
+      '{"status": "mass_insert"}'::gtype)
+  )) FROM generate_series(1, 200);
+
+-- 2. Rotate and Compact
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+
+-- 3. Verify the doubly-linked chain was created! 
+-- We should see multiple arraylist blocks for owner_id = 1, packed to the absolute brim.
+SELECT ctid, id, prev_itemptr, next_itemptr, octet_length(adj_list::text) AS payload_size
+FROM np_vertex_21_2_arraylist 
+WHERE id = 1
+ORDER BY ctid;
+
+-- =====================================================================
+-- TEST: Edge Migration from Supernode (Chained Arraylist Relabeling)
+-- =====================================================================
+
+-- 1. Grab sequence values safely
+CREATE TEMP TABLE supernode_relabel_ids (role text, v_id int8);
+INSERT INTO supernode_relabel_ids VALUES ('SuperA', nextval('np_vertex_id_seq_21_2'));
+INSERT INTO supernode_relabel_ids VALUES ('TargetB', nextval('np_vertex_id_seq_21_2'));
+
+-- 2. Create the vertices
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype));
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype));
+
+-- 3. Insert 200 edges to force block-chaining!
+SELECT count(insert_edge(
+  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
+  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
+  edge_build(
+      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
+      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
+      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
+      '{"test": "supernode_relabel"}'::gtype)
+)) FROM generate_series(1, 200);
+
+-- 4. Compact the edges into the chunked bare-metal TAM arraylists
+SELECT rotate_active_linked_list_table('vertex_graph', 2);
+SELECT compact_oldest_linked_list_table('vertex_graph', 2);
+
+-- 5. Execute the Relabel! 
+-- If migrate_vertex_edges fails to follow `next_itemptr`, this will either
+-- drop 56 edges into the void, or infinite loop/crash.
+SELECT set_vertex_label(
+    (SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 
+    2::int4, 21::int4, 'superLabel'
+) IS NOT NULL AS supernode_migration_successful;
+
+-- Clean up
+DROP TABLE supernode_relabel_ids;

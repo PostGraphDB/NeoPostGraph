@@ -40,6 +40,7 @@
 #include "access/np_entity_store.h"
 #include "access/np_phys_map.h"
 #include "access/np_linked_list.h"
+#include "access/np_arraylist.h"
 #include "catalog/np_label.h"
 #include "utils/np_cache.h"
 #include "utils/dictionary.h"
@@ -319,7 +320,34 @@ np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e)
     insert_edge_one_direction(start_v, end_v, e, 0, cid);
     insert_edge_one_direction(end_v, start_v, e, 1, cid);
 }
+/*
+ * In-place update for Arraylist chains. 
+ * Updates the prev_table and prev_itemptr of an array list block.
+ */
+static void
+np_update_arraylist_prev_pointer_inplace(Relation rel, ItemPointer tid, Oid new_prev_tbl, ItemPointer new_prev_tid)
+{
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    Page page = BufferGetPage(buffer);
 
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    if (!ItemIdIsNormal(lp)) {
+        UnlockReleaseBuffer(buffer);
+        elog(ERROR, "NeoPostGraph: attempted in-place prev update on invalid arraylist tuple");
+    }
+
+    GenericXLogState *state = GenericXLogStart(rel);
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    
+    NeoArrayListRecord *disk_rec = (NeoArrayListRecord *) PageGetItem(page, lp);
+    disk_rec->prev_tbl = new_prev_tbl;
+    disk_rec->prev_itemptr = *new_prev_tid;
+
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(buffer);
+}
 
 static void
 insert_edge_one_direction(vertex *owner_v, vertex *other_v, edge *e, uint8 direction, CommandId cid)
@@ -388,7 +416,16 @@ insert_edge_one_direction(vertex *owner_v, vertex *other_v, edge *e, uint8 direc
             close_rel = true;
         }
 
-        update_edge_prev_pointer(old_head_rel, &old_head, active_list_oid, &new_tid, cid);
+        TupleDesc old_desc = RelationGetDescr(old_head_rel);
+        if (old_desc->natts == 10) { 
+            update_edge_prev_pointer(old_head_rel, &old_head, active_list_oid, &new_tid, cid);
+        }
+        else if (old_desc->natts == 5) { 
+np_update_arraylist_prev_pointer_inplace(old_head_rel, &old_head, active_list_oid, &new_tid);
+        }
+        else {
+            elog(ERROR, "NeoPostGraph: Unknown old head format during insert_edge");
+        }
 
         if (close_rel) {
             table_close(old_head_rel, RowExclusiveLock);

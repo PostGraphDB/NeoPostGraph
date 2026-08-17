@@ -48,6 +48,7 @@
 
 #include "dml/dml_insert.h"
 #include "access/np_linked_list.h"
+#include "access/np_arraylist.h"
 #include "access/np_entity_store.h"
 
 void np_delete_edge_from_adj_list(int32 graph_id, int64 vertex_id, int32 vertex_label_id, int64 target_edge_id, CommandId cid, FullTransactionId current_fxid);
@@ -370,7 +371,6 @@ delete_vertex(PG_FUNCTION_ARGS)
 
     PG_RETURN_VOID();
 }
-
 void
 np_delete_edge_from_adj_list(int32 graph_id, int64 vertex_id, int32 vertex_label_id, int64 target_edge_id, CommandId cid, FullTransactionId current_fxid)
 {
@@ -402,38 +402,103 @@ np_delete_edge_from_adj_list(int32 graph_id, int64 vertex_id, int32 vertex_label
             elog(ERROR, "NeoPostGraph: Traversed into an invalid line pointer in linked list");
         }
         
-        NeoLinkedListRecord *rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+        TupleDesc desc = RelationGetDescr(list_rel);
         
-        /* If we found the edge and it isn't already deleted */
-        if (rec->id == target_edge_id && !FullTransactionIdIsValid(rec->xmax)) 
+        /* BRANCH 1: LINKED LIST */
+        if (desc->natts == 10) 
         {
-            GenericXLogState *state = GenericXLogStart(list_rel);
-            page = GenericXLogRegisterBuffer(state, buf, 0);
+            NeoLinkedListRecord *rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
             
-            lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&current_tid));
-            NeoLinkedListRecord *wal_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+            if (rec->id == target_edge_id && !FullTransactionIdIsValid(rec->xmax)) 
+            {
+                GenericXLogState *state = GenericXLogStart(list_rel);
+                page = GenericXLogRegisterBuffer(state, buf, 0);
+                
+                lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&current_tid));
+                NeoLinkedListRecord *wal_rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
+                
+                wal_rec->xmax = current_fxid;
+                wal_rec->cmax = cid;
+                
+                GenericXLogFinish(state);
+                UnlockReleaseBuffer(buf);
+                table_close(list_rel, RowExclusiveLock);
+                return; /* Successfully unlinked */
+            }
             
-            /* Stamp the MVCC tombstone directly on the adjacency record */
-            wal_rec->xmax = current_fxid;
-            wal_rec->cmax = cid;
+            Oid next_tbl = rec->next_tbl;
+            ItemPointerData next_tid = rec->next_itemptr;
             
-            GenericXLogFinish(state);
             UnlockReleaseBuffer(buf);
             table_close(list_rel, RowExclusiveLock);
-            return; /* Successfully unlinked */
+            
+            current_tbl = next_tbl;
+            current_tid = next_tid;
         }
-        
-        /* Not a match, extract the next pointers before dropping the lock */
-        Oid next_tbl = rec->next_tbl;
-        ItemPointerData next_tid = rec->next_itemptr;
-        
-        UnlockReleaseBuffer(buf);
-        table_close(list_rel, RowExclusiveLock);
-        
-        current_tbl = next_tbl;
-        current_tid = next_tid;
+/* BRANCH 2: ARRAYLIST */
+        else if (desc->natts == 5) 
+        {
+            NeoArrayListRecord *rec = (NeoArrayListRecord *) PageGetItem(page, lp);
+            Size raw_payload_size = ItemIdGetLength(lp) - offsetof(NeoArrayListRecord, adj_list_data);
+
+            /* Load the array safely into memory using the proven compactor logic */
+            AdjList *temp_adj = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
+            SET_VARSIZE(temp_adj, VARHDRSZ + raw_payload_size);
+            memcpy(VARDATA(temp_adj), rec->adj_list_data, raw_payload_size);
+
+            bool found = false;
+            for (int i = 0; i < temp_adj->nitems; i++) {
+                if (temp_adj->data[i].edge_id == target_edge_id && !FullTransactionIdIsValid(temp_adj->data[i].xmax)) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found) 
+            {
+                GenericXLogState *state = GenericXLogStart(list_rel);
+                page = GenericXLogRegisterBuffer(state, buf, 0);
+                
+                lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&current_tid));
+                NeoArrayListRecord *wal_rec = (NeoArrayListRecord *) PageGetItem(page, lp);
+
+                /* Create a fresh memory copy of the WAL page data to safely modify */
+                AdjList *wal_adj = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
+                SET_VARSIZE(wal_adj, VARHDRSZ + raw_payload_size);
+                memcpy(VARDATA(wal_adj), wal_rec->adj_list_data, raw_payload_size);
+                
+                /* Update the struct naturally using standard C array indexing */
+                for (int i = 0; i < wal_adj->nitems; i++) {
+                    if (wal_adj->data[i].edge_id == target_edge_id && !FullTransactionIdIsValid(wal_adj->data[i].xmax)) {
+                        wal_adj->data[i].xmax = current_fxid;
+                        wal_adj->data[i].cmax = cid;
+                        break;
+                    }
+                }
+                
+                /* Flush the perfectly aligned bytes back to the WAL block */
+                memcpy(wal_rec->adj_list_data, VARDATA(wal_adj), raw_payload_size);
+                
+                GenericXLogFinish(state);
+                pfree(wal_adj);
+                UnlockReleaseBuffer(buf);
+                table_close(list_rel, RowExclusiveLock);
+                pfree(temp_adj);
+                return; /* Successfully unlinked */
+            }
+            pfree(temp_adj);
+            
+            ItemPointerData next_tid = rec->next_itemptr;
+            UnlockReleaseBuffer(buf);
+            table_close(list_rel, RowExclusiveLock);
+            
+            current_tid = next_tid;
+        }
+        else 
+        {
+            UnlockReleaseBuffer(buf);
+            table_close(list_rel, RowExclusiveLock);
+            elog(ERROR, "NeoPostGraph: Unknown adjacency list table format");
+        }
     }
 }
-
-
-

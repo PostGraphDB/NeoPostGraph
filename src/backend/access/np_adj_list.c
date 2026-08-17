@@ -95,14 +95,13 @@ np_merge_existing_arraylist(Relation array_rel, ItemPointerData *target_tid, Adj
 
     if (ItemIdIsNormal(lp))
     {
-        /* CAST CORRECTLY: TAM pages contain NeoArrayListRecord, not HeapTupleHeader! */
         NeoArrayListRecord *rec = (NeoArrayListRecord *) PageGetItem(page, lp);
         next_tid = rec->next_itemptr;
 
-        /* Safely extract pure disk bytes and wrap in Postgres VarHeader */
         Size raw_payload_size = ItemIdGetLength(lp) - offsetof(NeoArrayListRecord, adj_list_data);
-        AdjList *old_adj = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
         
+        /* RESTORED: Your original, flawless re-padding logic */
+        AdjList *old_adj = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
         SET_VARSIZE(old_adj, VARHDRSZ + raw_payload_size);
         memcpy(VARDATA(old_adj), rec->adj_list_data, raw_payload_size);
 
@@ -114,7 +113,6 @@ np_merge_existing_arraylist(Relation array_rel, ItemPointerData *target_tid, Adj
     }
     UnlockReleaseBuffer(buffer);
 
-    /* Safely delete via page structure since simple_heap_delete bypasses TAM */
     delete_arraylist_record(array_rel, target_tid);
 
     return next_tid;
@@ -132,7 +130,6 @@ np_insert_arraylist_block(Relation array_rel,
                           ItemPointerData *prev_tid,
                           ItemPointerData *next_tid)
 {
-    /* USE TAM API: Never use simple_heap_insert on a custom access method! */
     TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(array_rel), &TTSOpsVirtual);
     ExecClearTuple(slot);
 
@@ -164,7 +161,6 @@ np_insert_arraylist_block(Relation array_rel,
 
     ExecStoreVirtualTuple(slot);
     
-    /* Routes directly to np_arraylist_am.c -> nparraylist_tableam_tuple_insert */
     table_tuple_insert(array_rel, slot, GetCurrentCommandId(true), 0, NULL);
     ItemPointerData new_array_tid = slot->tts_tid;
 
@@ -175,9 +171,10 @@ np_insert_arraylist_block(Relation array_rel,
 static AdjList *
 np_init_adj_list(int32 initial_capacity)
 {
-    Size size = offsetof(AdjList, data) + (initial_capacity * sizeof(AdjListMember));
-    AdjList *list = (AdjList *) palloc0(size);
-    SET_VARSIZE(list, size);
+    Size alloc_size = offsetof(AdjList, data) + (initial_capacity * sizeof(AdjListMember));
+    AdjList *list = (AdjList *) palloc0(alloc_size);
+    /* Set logical VARSIZE to exactly 0 items. It grows safely in np_append_adj_list */
+    SET_VARSIZE(list, offsetof(AdjList, data));
     list->nitems = 0;
     list->maxitems = initial_capacity;
     return list;
@@ -194,8 +191,21 @@ np_append_adj_list(AdjList *list, AdjListMember *member)
     }
     list->data[list->nitems] = *member;
     list->nitems++;
+    /* Keeps VARSIZE exactly pinned to the actual data count */
     SET_VARSIZE(list, offsetof(AdjList, data) + (list->nitems * sizeof(AdjListMember)));
     return list;
+}
+
+/*
+ * np_trim_adj_list
+ * Synchronizes maxitems with nitems so when this struct is read back from disk,
+ * the application doesn't try to append to unmapped padding. No repalloc needed
+ * because the TAM only reads up to VARSIZE.
+ */
+static void
+np_trim_adj_list(AdjList *list)
+{
+    list->maxitems = list->nitems;
 }
 
 static void
@@ -260,55 +270,109 @@ get_oldest_inactive_linked_list(Oid meta_oid)
     
     return oldest_oid;
 }
+/* 
+ * Calculate the exact maximum number of edges that can physically fit 
+ * on a standard PostgreSQL 8KB page without triggering TOAST.
+ */
+#define MAX_EDGES_PER_BLOCK ((MaxHeapTupleSize - SizeOfNeoArrayListRecord) / sizeof(AdjListMember))
 
-static ItemPointerData
-np_merge_and_insert_arraylist_block(Oid arraylist_tbl_oid,
-                                    uint64 vertex_id,
-                                    AdjList *adj,
-                                    Oid prev_tbl,
-                                    ItemPointerData *prev_tid,
-                                    ItemPointerData *downstream_tid,
-                                    CommandId cid)
+/*
+ * In-place update for Arraylist chains. 
+ * Reaches back to the previously inserted chunk and wires up its next_itemptr.
+ */
+static void
+np_update_arraylist_next_pointer_inplace(Relation rel, ItemPointer tid, ItemPointer new_next_tid)
 {
-    Relation rel = table_open(arraylist_tbl_oid, RowExclusiveLock);
-    ItemPointerData next_tid;
-    ItemPointerSetInvalid(&next_tid);
+    Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(tid));
+    LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+    Page page = BufferGetPage(buffer);
 
-    if (ItemPointerIsValid(downstream_tid))
-    {
-        Buffer buffer = ReadBuffer(rel, ItemPointerGetBlockNumber(downstream_tid));
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        Page page = BufferGetPage(buffer);
-        ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(downstream_tid));
-        
-        if (ItemIdIsNormal(lp))
-        {
-            /* CAST CORRECTLY to TAM structure */
-            NeoArrayListRecord *rec = (NeoArrayListRecord *) PageGetItem(page, lp);
-            next_tid = rec->next_itemptr;
-
-            Size raw_payload_size = ItemIdGetLength(lp) - offsetof(NeoArrayListRecord, adj_list_data);
-            AdjList *old_adj = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
-            SET_VARSIZE(old_adj, VARHDRSZ + raw_payload_size);
-            memcpy(VARDATA(old_adj), rec->adj_list_data, raw_payload_size);
-
-            for (int i = 0; i < old_adj->nitems; i++)
-            {
-                adj = np_append_adj_list(adj, &old_adj->data[i]);
-            }
-            pfree(old_adj);
-        }
+    ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    if (!ItemIdIsNormal(lp)) {
         UnlockReleaseBuffer(buffer);
-        delete_arraylist_record(rel, downstream_tid);
+        elog(ERROR, "NeoPostGraph: attempted in-place update on invalid arraylist tuple");
     }
 
-    /* Uses fixed TAM table_tuple_insert internally now */
-    ItemPointerData new_array_tid = np_insert_arraylist_block(
-        rel, vertex_id, adj, prev_tbl, prev_tid, &next_tid
-    );
+    GenericXLogState *state = GenericXLogStart(rel);
+    page = GenericXLogRegisterBuffer(state, buffer, 0);
+    lp = PageGetItemId(page, ItemPointerGetOffsetNumber(tid));
+    
+    NeoArrayListRecord *disk_rec = (NeoArrayListRecord *) PageGetItem(page, lp);
+    disk_rec->next_itemptr = *new_next_tid;
 
-    table_close(rel, RowExclusiveLock);
-    return new_array_tid;
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(buffer);
+}
+
+/*
+ * Slices a massive merged AdjList into perfectly maximized 8KB chunks.
+ * Inserts them sequentially, wiring up a doubly-linked chain across disk blocks.
+ */
+static ItemPointerData
+np_insert_chunked_arraylist(Relation array_rel,
+                            uint64 vertex_id,
+                            AdjList *adj,
+                            Oid prev_tbl,
+                            ItemPointerData *prev_tid,
+                            ItemPointerData *downstream_tid)
+{
+    int total_edges = adj->nitems;
+    
+    if (total_edges == 0) {
+        ItemPointerData invalid_tid;
+        ItemPointerSetInvalid(&invalid_tid);
+        return invalid_tid;
+    }
+
+    int chunks = (total_edges + MAX_EDGES_PER_BLOCK - 1) / MAX_EDGES_PER_BLOCK;
+    
+    Oid current_prev_tbl = prev_tbl;
+    ItemPointerData current_prev_tid = *prev_tid;
+    
+    ItemPointerData first_chunk_tid;
+    ItemPointerSetInvalid(&first_chunk_tid);
+    
+    ItemPointerData last_inserted_tid;
+    ItemPointerSetInvalid(&last_inserted_tid);
+
+    for (int i = 0; i < chunks; i++)
+    {
+        int edges_in_chunk = Min(MAX_EDGES_PER_BLOCK, total_edges - (i * MAX_EDGES_PER_BLOCK));
+        AdjList *chunk_adj = np_init_adj_list(edges_in_chunk);
+        
+        for (int j = 0; j < edges_in_chunk; j++) {
+            chunk_adj = np_append_adj_list(chunk_adj, &adj->data[(i * MAX_EDGES_PER_BLOCK) + j]);
+        }
+        np_trim_adj_list(chunk_adj);
+
+        ItemPointerData next_tid;
+        ItemPointerSetInvalid(&next_tid);
+        
+        /* The final tail chunk links to the existing downstream block */
+        if (i == chunks - 1) {
+            next_tid = *downstream_tid;
+        }
+
+        ItemPointerData new_tid = np_insert_arraylist_block(
+            array_rel, vertex_id, chunk_adj, 
+            current_prev_tbl, &current_prev_tid, &next_tid
+        );
+
+        if (i == 0) {
+            first_chunk_tid = new_tid; /* The head of the chain */
+        } else {
+            /* Reach back and point the previous chunk to this new chunk */
+            np_update_arraylist_next_pointer_inplace(array_rel, &last_inserted_tid, &new_tid);
+        }
+
+        current_prev_tbl = RelationGetRelid(array_rel);
+        current_prev_tid = new_tid;
+        last_inserted_tid = new_tid;
+        
+        pfree(chunk_adj);
+    }
+
+    return first_chunk_tid;
 }
 
 PG_FUNCTION_INFO_V1(compact_oldest_linked_list_table);
@@ -359,11 +423,6 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
     Relation old_ll_rel = table_open(oldest_ll_oid, AccessShareLock);
     BlockNumber nblocks = RelationGetNumberOfBlocks(old_ll_rel);
 
-    /* 
-     * ORIGINAL LOGIC RESTORED: This was perfectly correct because the 
-     * linked list table uses the np_linked_list_am TAM, so casting the page 
-     * item to NeoLinkedListRecord is exactly right.
-     */
     for (BlockNumber blk = 0; blk < nblocks; blk++)
     {
         Buffer buffer = ReadBuffer(old_ll_rel, blk);
@@ -418,36 +477,60 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
     CompactedVertexEntry *entry;
     hash_seq_init(&hash_seq, vertex_hash);
 
-    while ((entry = hash_seq_search(&hash_seq)) != NULL)
+while ((entry = hash_seq_search(&hash_seq)) != NULL)
     {
         Relation array_rel = table_open(arraylist_oid, RowExclusiveLock);
         
         ItemPointerData next_array_tid;
         ItemPointerSetInvalid(&next_array_tid);
 
+        /* 1. Extract the old disk block and append it to our RAM list */
         if (ItemPointerIsValid(&entry->downstream_tid))
         {
             next_array_tid = np_merge_existing_arraylist(array_rel, &entry->downstream_tid, &entry->adj);
         }
 
-        ItemPointerData new_array_tid = np_insert_arraylist_block(
+        /* 2. Trim the padding so we don't write dead space */
+        np_trim_adj_list(entry->adj);
+
+        /* 
+         * 3. THE PLUG-IN POINT:
+         * We used to call np_insert_arraylist_block here, which would explode 
+         * if the varlena was > 8KB. 
+         * Now, we hand the massive RAM list to the chunker. It slices it into 
+         * MAX_EDGES_PER_BLOCK sizes, inserts them sequentially, wires up the 
+         * doubly-linked next_itemptr/prev_itemptr chain, and returns the CTID 
+         * of the VERY FIRST block it inserted (the head of the chain).
+         */
+        ItemPointerData new_array_tid = np_insert_chunked_arraylist(
             array_rel, entry->owner_id, entry->adj,
             entry->upstream_tbl, &entry->upstream_tid,
             &next_array_tid
         );
 
         table_close(array_rel, RowExclusiveLock);
-
+/* 4. Wire the upstream pointer (Phys Map, Active Linked List, or Array List) to the head of the chain */
         if (OidIsValid(entry->upstream_tbl)) {
             Relation upstream_rel = table_open(entry->upstream_tbl, RowExclusiveLock);
-            np_update_next_pointer_inplace(upstream_rel, &entry->upstream_tid, 
-                                           arraylist_oid, &new_array_tid, cid);
+            TupleDesc up_desc = RelationGetDescr(upstream_rel);
+            
+            /* DYNAMIC ROUTING: Never cast an Array List to a Linked List! */
+            if (up_desc->natts == 10) { /* It's a Linked List */
+                np_update_next_pointer_inplace(upstream_rel, &entry->upstream_tid, 
+                                               arraylist_oid, &new_array_tid, cid);
+            } 
+            else if (up_desc->natts == 5) { /* It's an Array List */
+                np_update_arraylist_next_pointer_inplace(upstream_rel, &entry->upstream_tid, 
+                                                         &new_array_tid);
+            }
+            else {
+                elog(ERROR, "NeoPostGraph: Unknown upstream table format in compactor");
+            }
+            
             table_close(upstream_rel, RowExclusiveLock);
         } else {
             Relation pmap_rel = table_open(pmap_oid, RowExclusiveLock);
-            
             update_vertex_phys_map(pmap_rel, entry->owner_id, arraylist_oid, &new_array_tid, cid);
-            
             table_close(pmap_rel, RowExclusiveLock);
         }
         pfree(entry->adj);
@@ -455,7 +538,6 @@ compact_oldest_linked_list_table(PG_FUNCTION_ARGS)
 
     hash_destroy(vertex_hash);
 
-    /* Mark the processed table as compacted */
     Relation meta_rel = table_open(label->linked_list_meta, RowExclusiveLock);
     SysScanDesc meta_scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
     HeapTuple meta_tuple;

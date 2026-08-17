@@ -96,10 +96,6 @@ resolve_or_create_target_label(int32 graph_id, int32 current_label_id, const cha
                                const graph_cache_data *graph_cache, const char *raw_current_ltree);
 
 
-static void 
-migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
-                     Oid old_e_tbl_id, ItemPointerData old_e_itemptr,
-                     const graph_cache_data *graph_cache);
 
 
 /* 

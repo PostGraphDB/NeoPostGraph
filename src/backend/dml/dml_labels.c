@@ -64,6 +64,7 @@
 #include "utils/vertex.h"
 #include "dml/dml_insert.h"
 
+#include "access/np_arraylist.h"
 #include "access/np_entity_store.h"
 #include "access/np_phys_map.h"
 
@@ -273,7 +274,6 @@ np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label)
     table_close(e_rel, AccessShareLock);
     return e;
 }
-
 static void 
 migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                      Oid old_e_tbl_id, ItemPointerData old_e_itemptr,
@@ -294,7 +294,6 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
         Relation rel = table_open(curr_tbl_id, AccessShareLock);
         BlockNumber blk = ItemPointerGetBlockNumber(&curr_tid);
         
-        /* Safe bounds check BEFORE reading to prevent Unpin panics */
         if (blk >= RelationGetNumberOfBlocks(rel)) {
             table_close(rel, AccessShareLock);
             break;
@@ -305,11 +304,6 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
         Page page = BufferGetPage(buf);
         ItemId lp = PageGetItemId(page, ItemPointerGetOffsetNumber(&curr_tid));
 
-        /* 
-         * THE CRITICAL FIX: 
-         * Postgres physically prunes dead line pointers. We must ensure the pointer 
-         * hasn't been pruned before attempting to cast or deform its memory.
-         */
         if (!ItemIdIsNormal(lp)) {
             UnlockReleaseBuffer(buf);
             table_close(rel, AccessShareLock);
@@ -323,7 +317,7 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
         ItemPointerSetInvalid(&next_tid);
 
         if (desc->natts == 10) {
-            /* 10 columns means this is a Linked List partition */
+            /* Linked List partition */
             NeoLinkedListRecord *rec = (NeoLinkedListRecord *) PageGetItem(page, lp);
             next_tbl = rec->next_tbl;
             next_tid = rec->next_itemptr;
@@ -341,10 +335,8 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
                 edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
 
-                /* Canonical delete to handle WAL/tombstones for the old vertex */
                 np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
 
-                /* Safely update both sides (handles self-loops correctly) */
                 if (e->start_id == old_v->id && e->start_label == old_v->label_id) {
                     e->start_id = new_v->id;
                     e->start_label = new_v->label_id;
@@ -354,10 +346,8 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                     e->end_label = new_v->label_id;
                 }
 
-                /* Determine if the neighbor is us */
                 vertex *actual_neighbor = (o_id == old_v->id && o_lid == old_v->label_id) ? new_v : neighbor_v;
 
-                /* Let the definitively updated edge dictate the exact insertion order */
                 if (e->start_id == new_v->id && e->start_label == new_v->label_id) {
                     np_internal_insert_edge(new_v, actual_neighbor, e);
                 } else {
@@ -368,75 +358,95 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 pfree(e);
             }
         } else if (desc->natts == 5) {
-            HeapTupleData tup;
-            tup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
-            tup.t_len = ItemIdGetLength(lp);
-            tup.t_self = curr_tid;
-
-            Datum vals[5] = {0}; bool nulls[5] = {0};
-            heap_deform_tuple(&tup, desc, vals, nulls);
+            NeoArrayListRecord *rec = (NeoArrayListRecord *) PageGetItem(page, lp);
 
             next_tbl = curr_tbl_id;
-            if (!nulls[4]) {
-                next_tid = *((ItemPointer) DatumGetPointer(vals[4]));
-            } else {
-                ItemPointerSetInvalid(&next_tid);
+            next_tid = rec->next_itemptr;
+
+            int32 raw_payload_size = (int32)ItemIdGetLength(lp) - (int32)offsetof(NeoArrayListRecord, adj_list_data);
+
+            if (raw_payload_size <= 0 || raw_payload_size > 8192) {
+                UnlockReleaseBuffer(buf);
+                table_close(rel, AccessShareLock);
+                break;
             }
 
-            MigratorAdjList *adj_copy = NULL; 
-            if (!nulls[3]) {
-                /* 
-                 * DatumGetByteaPCopy GUARANTEES the 1-byte short header 
-                 * is expanded back into a standard 4-byte VARHDRSZ,
-                 * perfectly aligning it with your struct layout.
-                 */
-                adj_copy = (MigratorAdjList *) DatumGetByteaPCopy(vals[3]);
-            }
+
+            AdjList *adj_copy = (AdjList *) palloc(VARHDRSZ + raw_payload_size);
+            SET_VARSIZE(adj_copy, VARHDRSZ + raw_payload_size);
+            memcpy(VARDATA(adj_copy), rec->adj_list_data, raw_payload_size);
 
             UnlockReleaseBuffer(buf);
             table_close(rel, AccessShareLock);
+/* Create arrays to hold the fetched payloads safely in memory */
+            edge **migrated_edges = palloc(adj_copy->nitems * sizeof(edge *));
+            vertex **migrated_neighbors = palloc(adj_copy->nitems * sizeof(vertex *));
+            int migrated_count = 0;
 
-            if (adj_copy) {
-                
-                for (int i = 0; i < adj_copy->nitems; i++) {
-                    if (FullTransactionIdIsValid(adj_copy->data[i].xmax)) {
-                        continue;
-                    }
+            /* ==========================================
+             * PASS 1: FETCH AND DELETE (ISOLATED)
+             * ========================================== */
+            for (int i = 0; i < adj_copy->nitems; i++) {
+                if (FullTransactionIdIsValid(adj_copy->data[i].xmax)) continue;
 
-                    uint64 e_id = adj_copy->data[i].edge_id;
-                    int32 e_lid = adj_copy->data[i].edge_lid;
-                    int64 o_id = adj_copy->data[i].other_id;
-                    int32 o_lid = adj_copy->data[i].other_lid;
-                    uint8 dir = adj_copy->data[i].dir;
+                uint64 e_id = adj_copy->data[i].edge_id;
+                int32 e_lid = adj_copy->data[i].edge_lid;
+                int64 o_id = adj_copy->data[i].other_id;
+                int32 o_lid = adj_copy->data[i].other_lid;
 
+                vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
+                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
 
-                    vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
-                    edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
-
-                    np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
-
-                    if (e->start_id == old_v->id) {
-                        e->start_id = new_v->id;
-                        e->start_label = new_v->label_id;
-                    }
-                    if (e->end_id == old_v->id) {
-                        e->end_id = new_v->id;
-                        e->end_label = new_v->label_id;
-                    }
-
-                    vertex *actual_neighbor = (o_id == old_v->id) ? new_v : neighbor_v;
-                    
-                    if (e->start_id == new_v->id)
-                        np_internal_insert_edge(new_v, actual_neighbor, e);
-                    else 
-                        np_internal_insert_edge(actual_neighbor, new_v, e);
-
-
-                    pfree(neighbor_v);
-                    pfree(e);
+                if (e == NULL || neighbor_v == NULL) {
+                    if (e) pfree(e);
+                    if (neighbor_v) pfree(neighbor_v);
+                    continue;
                 }
-                pfree(adj_copy);
+
+                /* Execute Delete. Array list WAL buffer is flushed and unpinned here. */
+                np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
+
+                /* Save the pristine payloads for Pass 2 */
+                migrated_edges[migrated_count] = e;
+                migrated_neighbors[migrated_count] = neighbor_v;
+                migrated_count++;
             }
+
+            /* ==========================================
+             * PASS 2: MUTATE AND INSERT (ISOLATED)
+             * ========================================== */
+            for (int i = 0; i < migrated_count; i++) {
+                edge *e = migrated_edges[i];
+                vertex *neighbor_v = migrated_neighbors[i];
+
+                /* Safely re-calculate o_id/o_lid from the saved neighbor */
+                int64 o_id = neighbor_v->id;
+                int32 o_lid = neighbor_v->label_id;
+
+                if (e->start_id == old_v->id && e->start_label == old_v->label_id) {
+                    e->start_id = new_v->id;
+                    e->start_label = new_v->label_id;
+                }
+                if (e->end_id == old_v->id && e->end_label == old_v->label_id) {
+                    e->end_id = new_v->id;
+                    e->end_label = new_v->label_id;
+                }
+
+                vertex *actual_neighbor = (o_id == old_v->id && o_lid == old_v->label_id) ? new_v : neighbor_v;
+                
+                /* New Linked List buffers are pinned and written here, totally isolated from Delete */
+                if (e->start_id == new_v->id && e->start_label == new_v->label_id)
+                    np_internal_insert_edge(new_v, actual_neighbor, e);
+                else 
+                    np_internal_insert_edge(actual_neighbor, new_v, e);
+
+                pfree(neighbor_v);
+                pfree(e);
+            }
+            
+            pfree(migrated_edges);
+            pfree(migrated_neighbors);
+            pfree(adj_copy);
         } else {
             UnlockReleaseBuffer(buf);
             table_close(rel, AccessShareLock);
@@ -994,11 +1004,9 @@ create_vlabel_from_path_internal(int32 graph_id, const char *ltree_path)
 
     Oid nsp_oid = get_namespace_oid("neopostgraph", false);
 
-    /* Get the new Label ID directly from the graph's sequence */
-    Oid seq_oid = get_relname_relid(psprintf("np_label_id_seq_%d", graph_id), nsp_oid);
-    if (!OidIsValid(seq_oid)) {
-        elog(ERROR, "Could not find sequence for graph %d labels", graph_id);
-    }
+    /* THE FIX: Let Postgres find the sequence dynamically via the search_path */
+    RangeVar *rv = makeRangeVar(NULL, psprintf("vertex_label_id_seq_%d", graph_id), -1);
+    Oid seq_oid = RangeVarGetRelid(rv, NoLock, false);
     
     int32 new_label_id = (int32) DatumGetInt64(DirectFunctionCall1(nextval_oid, ObjectIdGetDatum(seq_oid)));
     
@@ -1016,7 +1024,6 @@ create_vlabel_from_path_internal(int32 graph_id, const char *ltree_path)
         graph_cache->annot_schema_phys_map
     );
 
-    /* Return the generated ID directly to the caller */
     return new_label_id;
 }
 
