@@ -327,9 +327,9 @@ Not-null constraints:
     "np_edge_21_1_edge_not_null" NOT NULL "edge"
 
 SELECT * FROM public.np_edge_21_1;
- id |                                         edge                                          
-----+---------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+ id |                                          edge                                          
+----+----------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
 (1 row)
 
 select insert_edge(
@@ -403,10 +403,10 @@ ERROR:  relation "np_vertex_1_1_1_linked_list" does not exist
 LINE 1: select * From np_vertex_1_1_1_linked_list;
                       ^
 SELECT * FROM public.np_edge_21_1;
- id |                                         edge                                          
-----+---------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
+ id |                                          edge                                          
+----+----------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
 (2 rows)
 
 SELECT insert_vertex(
@@ -792,14 +792,14 @@ SELECT * FROM np_vertex_21_3_arraylist;
 (2 rows)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                         edge                                          
-----+---------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
+ id |                                          edge                                          
+----+----------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
 (6 rows)
 
 select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::date}'::gtype);
@@ -809,14 +809,14 @@ select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::da
 (1 row)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                                      edge                                                      
-----+----------------------------------------------------------------------------------------------------------------
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {}}
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {"known_since": 12-31-1971}}
+ id |                                                      edge                                                       
+----+-----------------------------------------------------------------------------------------------------------------
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}}
 (6 rows)
 
 select * from np_vertex_21_1_1_linked_list;
@@ -835,13 +835,13 @@ select delete_edge(2::int8, 1::int4, 21::int4);
 (1 row)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                                      edge                                                      
-----+----------------------------------------------------------------------------------------------------------------
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "", "properties": {}}
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "", "properties": {"known_since": 12-31-1971}}
+ id |                                                      edge                                                       
+----+-----------------------------------------------------------------------------------------------------------------
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}}
 (5 rows)
 
 select * from np_vertex_21_1_1_linked_list;

@@ -288,15 +288,10 @@ CREATE TYPE edge (
 --
 -- DDL Commands
 --
-CREATE FUNCTION create_elabel(graph_name Name, label public.ltree, namespace text DEFAULT NULL)
-RETURNS void 
-LANGUAGE c 
-AS 'MODULE_PATHNAME';
-
-CREATE FUNCTION create_elabel(graph_name Name, label text, namespace text DEFAULT NULL)
-RETURNS void 
-LANGUAGE c 
-AS 'MODULE_PATHNAME';
+CREATE OR REPLACE FUNCTION create_elabel(graph_name name, label_name text, namespace_name text DEFAULT NULL, annotations text[] DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'create_elabel';
 
 CREATE FUNCTION merge_elabels(graph_name Name, current_label_id int4, base_label_id int4, namespace text DEFAULT NULL)
 RETURNS void 
@@ -338,6 +333,16 @@ CREATE FUNCTION remove_edge_label(edge_id bigint, label_id integer, graph_id int
 RETURNS edge
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'remove_edge_label';
+
+CREATE FUNCTION add_edge_annotation(edge_id bigint, label_id integer, graph_id integer, annotation text)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'add_edge_annotation';
+
+CREATE FUNCTION remove_edge_annotation(edge_id bigint, label_id integer, graph_id integer, annotation text)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME', 'remove_edge_annotation';
 
 --
 --

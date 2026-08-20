@@ -726,18 +726,19 @@ fill_edge_label_cache_data(label_cache_data *cache_data,
 {
     bool is_null;
 
-    cache_data->id         = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
-    cache_data->label      = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
-    cache_data->vertex_tbl = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
+    cache_data->id               = DatumGetInt32(heap_getattr(tuple, 1, tuple_desc, &is_null));
+    cache_data->label            = DatumGetLtreePCopy(heap_getattr(tuple, 2, tuple_desc, &is_null));
+    cache_data->vertex_tbl       = DatumGetObjectId(heap_getattr(tuple, 3, tuple_desc, &is_null));
     cache_data->phys_map         = DatumGetObjectId(heap_getattr(tuple, 4, tuple_desc, &is_null));
+    cache_data->annotations_tbl  = DatumGetObjectId(heap_getattr(tuple, 5, tuple_desc, &is_null));
+    Datum map_datum              = heap_getattr(tuple, 6, tuple_desc, &is_null);
+    cache_data->annotation_map   = is_null ? NULL : DatumGetArrayTypePCopy(map_datum);
+
     cache_data->linked_list_meta = InvalidOid;
     cache_data->linked_list_seq  = InvalidOid;
     cache_data->arraylist        = InvalidOid;
-    cache_data->annotations_tbl = InvalidOid;
-    cache_data->annotation_map = NULL;
     cache_data->annotation_byte_size = 0;
 }
-
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id)
 {
     initialize_caches();

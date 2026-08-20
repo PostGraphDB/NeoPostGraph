@@ -158,9 +158,11 @@ Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
     Oid phys_map = create_label_edge_physical_mapping_table(
                         psprintf("np_edge_%d_%d_phys_map", graph_id, label_id), namespace);
 
+    /* Updated to pass InvalidOid and (Datum)0 for the 6th and 7th arguments */
     insert_label(psprintf("np_edge_label_%d", graph_id), 
                  DirectFunctionCall1(ltree_in, CStringGetDatum(CATALOG_LTREE_ROOT_LABEL)), 
-                 label_id, edge_tbl, phys_map);
+                 label_id, edge_tbl, phys_map, InvalidOid, (Datum)0);
+                 
     //TODO
     //Oid dict_id = create_vertex_property_dictionary(graph_id, label_id);
     //create_vertex_dictionary_metadata_btree_index(graph_id, label_id, dict_id);
@@ -178,7 +180,6 @@ Oid create_default_elabel(int graph_id, Oid edge_id_seq, Oid namespace)
 
     return edge_tbl;
 }
-
 Oid build_vertex_label_infrastructure(
     int graph_id, int label_id, Oid namespace,
     Datum label_ltree, int byte_allocation_size,
@@ -315,8 +316,14 @@ Oid create_label_metadata_table(char *meta_tbl_name) {
     def_const->raw_expr = (Node *) makeStringConst("true", -1);
     is_primary->constraints = list_make1(def_const);
 
+    ColumnDef *annotations_tbl = makeColumnDef("annotations_tbl", REGCLASSOID, -1, InvalidOid);
+    ColumnDef *annotation_map = makeColumnDef("annotation_map", TEXTARRAYOID, -1, InvalidOid);
+
     List *cols = list_make4(id, ltree, vertex_tbl, phys_map);
+    cols = lappend(cols, annotations_tbl);
+    cols = lappend(cols, annotation_map);
     cols = lappend(cols, is_primary);
+
 
     return execute_internal_create_table("neopostgraph", meta_tbl_name, cols, NULL);
 }

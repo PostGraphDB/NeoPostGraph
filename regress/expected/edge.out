@@ -123,20 +123,22 @@ SELECT * FROM np_graph graph WHERE graph.name = 'edge_graph';
 (1 row)
 
 select * FROM np_edge_label_26;
- id | ltree |     tbl      |       phys_map        | is_primary 
-----+-------+--------------+-----------------------+------------
-  1 | _     | np_edge_26_1 | np_edge_26_1_phys_map | t
+ id | ltree |     tbl      |       phys_map        | annotations_tbl | annotation_map | is_primary 
+----+-------+--------------+-----------------------+-----------------+----------------+------------
+  1 | _     | np_edge_26_1 | np_edge_26_1_phys_map |                 |                | t
 (1 row)
 
 \d+ np_edge_label_26
-                             Table "neopostgraph.np_edge_label_26"
-   Column   |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
-------------+----------+-----------+----------+---------+----------+--------------+-------------
- id         | integer  |           | not null |         | plain    |              | 
- ltree      | ltree    |           | not null |         | extended |              | 
- tbl        | regclass |           | not null |         | plain    |              | 
- phys_map   | regclass |           | not null |         | plain    |              | 
- is_primary | boolean  |           |          | true    | plain    |              | 
+                                Table "neopostgraph.np_edge_label_26"
+     Column      |   Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------------+----------+-----------+----------+---------+----------+--------------+-------------
+ id              | integer  |           | not null |         | plain    |              | 
+ ltree           | ltree    |           | not null |         | extended |              | 
+ tbl             | regclass |           | not null |         | plain    |              | 
+ phys_map        | regclass |           | not null |         | plain    |              | 
+ annotations_tbl | regclass |           |          |         | plain    |              | 
+ annotation_map  | text[]   |           |          |         | extended |              | 
+ is_primary      | boolean  |           |          | true    | plain    |              | 
 Indexes:
     "np_edge_label_26_btree_idx" PRIMARY KEY, btree (id)
     "np_edge_label_26_gist_idx" gist (ltree) WHERE is_primary
@@ -256,5 +258,95 @@ SELECT id, ltree FROM np_edge_label_31 WHERE ltree = '_.colleague.promoted'::ltr
  id |        ltree         
 ----+----------------------
   8 | _.colleague.promoted
+(1 row)
+
+-- 6. Test: remove_edge_label
+-- Downgrades Edge 1 from '_.colleague.promoted' (ID 8) back to '_.colleague' (ID 4)
+SELECT remove_edge_label(1::int8, 8, 31, 'promoted'::text);
+                                                     remove_edge_label                                                     
+---------------------------------------------------------------------------------------------------------------------------
+ {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "colleague", "properties": {"department": "engineering"}}
+(1 row)
+
+-- Verify it properly migrated back to the original table
+SELECT * FROM np_edge_31_4 WHERE id = 1;
+ id |                                                           edge                                                            
+----+---------------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "colleague", "properties": {"department": "engineering"}}
+(1 row)
+
+--
+-- Edge Annotations Tests
+--
+-- 1. Create a new edge label equipped with an annotation schema
+SELECT create_elabel('edge_graph', 'friend', 'public', ARRAY['close', 'distant']);
+NOTICE:  elabel "edge_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+-- 2. Insert a new edge (Edge ID 2, Label ID 9) between Vertex 1 and 2
+SELECT insert_edge(
+    vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
+    edge_build(2::int8, 31, 9, 0::smallint, 
+        vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
+        '{"met": "college"}'::gtype
+    )
+);
+ insert_edge 
+-------------
+ 
+(1 row)
+
+-- 3. Initial State: Output should show base label "friend"
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+ id |                                                    edge                                                     
+----+-------------------------------------------------------------------------------------------------------------
+  2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend", "properties": {"met": "college"}}
+(1 row)
+
+-- 4. Mutation: Add the 'close' annotation
+SELECT add_edge_annotation(2::int8, 9, 31, 'close');
+ add_edge_annotation 
+---------------------
+ 
+(1 row)
+
+-- 4a. Prove Binary State: Entity Store should hold the updated bitset
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+ id | annotations 
+----+-------------
+  2 | \x01
+(1 row)
+
+-- 4b. Prove String State: edge_out should dynamically append ":close"
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+ id |                                                       edge                                                        
+----+-------------------------------------------------------------------------------------------------------------------
+  2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend:close", "properties": {"met": "college"}}
+(1 row)
+
+-- 5. Teardown: Remove the 'close' annotation
+SELECT remove_edge_annotation(2::int8, 9, 31, 'close');
+ remove_edge_annotation 
+------------------------
+ 
+(1 row)
+
+-- 5a. Prove Binary State: Entity Store bitset should revert
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+ id | annotations 
+----+-------------
+  2 | \x00
+(1 row)
+
+-- 5b. Prove String State: edge_out should revert to base label "friend"
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+ id |                                                    edge                                                     
+----+-------------------------------------------------------------------------------------------------------------
+  2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend", "properties": {"met": "college"}}
 (1 row)
 

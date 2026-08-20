@@ -87,7 +87,6 @@ Oid create_linked_list_table_sequence(char *seq_name, char *namespace);
 Oid create_vertex_label_linked_list_metadata_table(char *tbl_name, Oid namespace);
 int insert_vertex_ll_meta(char *table_name, Oid namespace, int ll_seq, Oid tbl);
 Oid create_vertex_label_linked_list_table(char *tbl_name, Oid namespace);
-int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map);
 Oid create_edge_tables(int graph_id, int label_id, Oid namespace);
 Oid create_vertex_label_annotation_table(char *tbl_name, Oid namespace, int byte_allocation_size);
 
@@ -223,8 +222,7 @@ pfree(clean_array);
     table_close(pmap_rel, RowExclusiveLock);
 }
 
-int32
-create_elabel_internal(const char *graph_name, const char *new_label_str, const char *namespace_name, Datum *out_id)
+int32 create_elabel_internal(const char *graph_name, const char *new_label_str, const char *namespace_name, ArrayType *annotations, Datum *out_id)
 {
     Oid namespace;
     if (namespace_name) {
@@ -246,7 +244,32 @@ create_elabel_internal(const char *graph_name, const char *new_label_str, const 
     
     Oid phys_map = create_label_edge_physical_mapping_table(
                         psprintf("np_edge_%d_%d_phys_map", entry->id, label_id), namespace);
+
+    /* --- SAFELY CREATE ANNOTATION TABLE AND WRITE TO ENTITY STORE --- */
+    Oid annot_tbl_oid = InvalidOid;
+    Datum annot_map_datum = (Datum)0; /* <--- Initialize as NULL */
     
+    if (annotations != NULL) {
+        annot_map_datum = PointerGetDatum(annotations); /* <--- Cast the array to a Datum */
+        
+        int num_elements;
+        Datum *elements;
+        bool *nulls;
+        deconstruct_array(annotations, TEXTOID, -1, false, TYPALIGN_INT, &elements, &nulls, &num_elements);
+        
+        if (num_elements > 0) {
+            int byte_allocation_size = (num_elements + 7) / 8;
+            /* Physically create the annotation table for this edge */
+            annot_tbl_oid = create_vertex_label_annotation_table(
+                                psprintf("np_edge_annotations_%d_%d", entry->id, label_id), 
+                                namespace, byte_allocation_size);
+            
+            /* Write the schema array to the Entity Store */
+            insert_annotation_schema(entry->id, label_id, annotations, entry->annot_schema_tbl, entry->annot_schema_phys_map);
+        }
+    }
+    /* ---------------------------------------------------------------- */
+
     insert_label(
         psprintf("np_edge_label_%d", entry->id),
         DirectFunctionCall2(ltree_addltree,
@@ -255,7 +278,9 @@ create_elabel_internal(const char *graph_name, const char *new_label_str, const 
         ),
         label_id,
         edge_tbl,
-        phys_map
+        phys_map,
+        annot_tbl_oid,  
+        annot_map_datum /* <--- PASS IT CORRECTLY HERE */
     );
 
     CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
@@ -273,7 +298,6 @@ create_elabel_internal(const char *graph_name, const char *new_label_str, const 
     if (out_id) *out_id = Int32GetDatum(label_id);
     return label_id;
 }
-
 PG_FUNCTION_INFO_V1(create_elabel);
 Datum create_elabel(PG_FUNCTION_ARGS)
 {
@@ -289,14 +313,84 @@ Datum create_elabel(PG_FUNCTION_ARGS)
     char *new_label_str = text_to_cstring(label_text);
     
     char *namespace_name = NULL;
-    if (!PG_ARGISNULL(2)) {
+    if (PG_NARGS() > 2 && !PG_ARGISNULL(2)) {
         namespace_name = TextDatumGetCString(PG_GETARG_DATUM(2));
     }
 
-    create_elabel_internal(graph_name, new_label_str, namespace_name, NULL);
+    ArrayType *annotations = NULL;
+    if (PG_NARGS() > 3 && !PG_ARGISNULL(3)) {
+        annotations = PG_GETARG_ARRAYTYPE_P(3);
+    }
+
+    create_elabel_internal(graph_name, new_label_str, namespace_name, annotations, NULL);
     
     pfree(new_label_str);
     ereport(NOTICE, (errmsg("elabel \"%s\" has been created", graph_name)));
+
+    PG_RETURN_VOID();
+}
+
+static ArrayType *merge_and_dedupe_text_arrays(ArrayType *arr1, ArrayType *arr2)
+{
+    if (!arr1 && !arr2) return NULL;
+    if (!arr1) return arr2;
+    if (!arr2) return arr1;
+
+    Datum *d1, *d2;
+    bool *n1, *n2;
+    int c1, c2;
+
+    deconstruct_array(arr1, TEXTOID, -1, false, 'i', &d1, &n1, &c1);
+    deconstruct_array(arr2, TEXTOID, -1, false, 'i', &d2, &n2, &c2);
+
+    Datum *d_out = palloc((c1 + c2) * sizeof(Datum));
+    int c_out = 0;
+
+    for (int i = 0; i < c1; i++) {
+        if (n1[i]) continue;
+        d_out[c_out++] = d1[i];
+    }
+
+    for (int i = 0; i < c2; i++) {
+        if (n2[i]) continue;
+        char *s2 = TextDatumGetCString(d2[i]);
+        bool duplicate = false;
+        
+        for (int j = 0; j < c_out; j++) {
+            char *s1 = TextDatumGetCString(d_out[j]);
+            if (strcmp(s1, s2) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        
+        if (!duplicate) d_out[c_out++] = d2[i];
+    }
+
+    if (c_out == 0) return NULL;
+    return construct_array(d_out, c_out, TEXTOID, -1, false, 'i');
+}
+
+PG_FUNCTION_INFO_V1(merge_elabels);
+Datum merge_elabels(PG_FUNCTION_ARGS)
+{
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1) || PG_ARGISNULL(2))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label IDs must not be NULL")));
+
+    char *graph_name = NameStr(*PG_GETARG_NAME(0));
+    int32 current_label_id = PG_GETARG_INT32(1);
+    int32 base_label_id = PG_GETARG_INT32(2);
+    
+    char *namespace_name = NULL;
+    if (PG_NARGS() > 3 && !PG_ARGISNULL(3)) {
+        namespace_name = TextDatumGetCString(PG_GETARG_DATUM(3));
+    }
+
+    merge_elabels_internal(graph_name, current_label_id, base_label_id, namespace_name);
+    
+    ereport(NOTICE, (errmsg("Merged elabels %d and %d for graph \"%s\"", current_label_id, base_label_id, graph_name)));
 
     PG_RETURN_VOID();
 }
@@ -339,13 +433,32 @@ merge_elabels_internal(const char *graph_name, int32 current_label_id, int32 bas
     Oid phys_map = create_label_edge_physical_mapping_table(
                         psprintf("np_edge_%d_%d_phys_map", graph_cache->id, new_label_id), namespace);
 
-    /* Insert directly with the pre-merged ltree */
+    /* --- Handle Annotations Inheritance (Just like Vertices) --- */
+    ArrayType *merged_array = merge_and_dedupe_text_arrays(current_label->annotation_map, base_label->annotation_map);
+    Datum merged_array_datum = (merged_array != NULL) ? PointerGetDatum(merged_array) : (Datum)0;
+
+    Oid annot_tbl_oid = InvalidOid;
+    
+    if (merged_array != NULL) {
+        int byte_allocation_size = (ArrayGetNItems(ARR_NDIM(merged_array), ARR_DIMS(merged_array)) + 7) / 8;
+        
+        annot_tbl_oid = create_vertex_label_annotation_table(
+                            psprintf("np_edge_annotations_%d_%d", graph_cache->id, new_label_id), 
+                            namespace, byte_allocation_size);
+        
+        insert_annotation_schema(graph_cache->id, new_label_id, merged_array, graph_cache->annot_schema_tbl, graph_cache->annot_schema_phys_map);
+    }
+    /* ----------------------------------------------------------- */
+
+    /* Insert directly with the pre-merged ltree AND merged annotations */
     insert_label(
         psprintf("np_edge_label_%d", graph_cache->id),
         merged_ltree,
         new_label_id,
         edge_tbl,
-        phys_map
+        phys_map,
+        annot_tbl_oid,      /* The combined annotation physical table */
+        merged_array_datum  /* The inherited annotation schema map */
     );
 
     CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
@@ -365,30 +478,6 @@ merge_elabels_internal(const char *graph_name, int32 current_label_id, int32 bas
     pfree(merged_path_str);
 
     return new_label_id;
-}
-
-PG_FUNCTION_INFO_V1(merge_elabels);
-Datum merge_elabels(PG_FUNCTION_ARGS)
-{
-    if (PG_ARGISNULL(0))
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
-    if (PG_ARGISNULL(1) || PG_ARGISNULL(2))
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label IDs must not be NULL")));
-
-    char *graph_name = NameStr(*PG_GETARG_NAME(0));
-    int32 current_label_id = PG_GETARG_INT32(1);
-    int32 base_label_id = PG_GETARG_INT32(2);
-    
-    char *namespace_name = NULL;
-    if (PG_NARGS() > 3 && !PG_ARGISNULL(3)) {
-        namespace_name = TextDatumGetCString(PG_GETARG_DATUM(3));
-    }
-
-    merge_elabels_internal(graph_name, current_label_id, base_label_id, namespace_name);
-    
-    ereport(NOTICE, (errmsg("Merged elabels %d and %d for graph \"%s\"", current_label_id, base_label_id, graph_name)));
-
-    PG_RETURN_VOID();
 }
 
 Oid create_label_edge_physical_mapping_table(char *tbl_name, Oid namespace)
@@ -538,21 +627,24 @@ void insert_vertex_label(char *table_name, Datum label, Oid label_id, Oid tbl, O
     CommandCounterIncrement();
 }
 
-int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map)
+int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_map, Oid annot_tbl, Datum annot_map)
 {
     Relation rel = table_open(np_relation_id(table_name, "table"), RowExclusiveLock);
 
-    /* Update to 5 columns to account for the is_primary flag */
-    Datum values[5] = {
+    /* Updated to 7 columns to match vertex catalog parity */
+    Datum values[7] = {
         ObjectIdGetDatum(label_id),
         label,
         ObjectIdGetDatum(tbl),
         ObjectIdGetDatum(phys_map),
-        BoolGetDatum(true) /* COL 5: is_primary = true */
+        ObjectIdGetDatum(annot_tbl),
+        annot_map,
+        BoolGetDatum(true) /* COL 7: is_primary = true */
     };
     
-    /* Initialize all 5 to false safely */
-    bool nulls[5] = { false };
+    bool nulls[7] = { false };
+    if (!OidIsValid(annot_tbl)) nulls[4] = true;
+    if (annot_map == (Datum)0) nulls[5] = true;
 
     HeapTuple tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -560,10 +652,10 @@ int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_
     TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(rel), &TTSOpsHeapTuple);
     ExecStoreHeapTuple(tup, slot, false);
 
-    /* 1. Insert directly into the table heap via slot (Bypasses CatalogTupleInsert) */
+    /* 1. Insert directly into the table heap via slot */
     table_tuple_insert(rel, slot, GetCurrentCommandId(true), 0, NULL);
 
-    /* 2. Manually insert into indexes, bypassing the CatalogIndexInsert assertion */
+    /* 2. Manually insert into indexes */
     List *indexoidlist = RelationGetIndexList(rel);
     ListCell *lc;
 
@@ -575,10 +667,8 @@ int insert_label(char *table_name, Datum label, Oid label_id, Oid tbl, Oid phys_
         Datum idx_values[INDEX_MAX_KEYS];
         bool idx_nulls[INDEX_MAX_KEYS];
 
-        /* Extract the specific index data from the tuple slot */
         FormIndexDatum(indexInfo, slot, NULL, idx_values, idx_nulls);
 
-        /* Push into the index natively */
         index_insert(indexDesc, idx_values, idx_nulls,
                      &(slot->tts_tid),
                      rel,
@@ -1755,6 +1845,466 @@ Datum add_annotation_label(PG_FUNCTION_ARGS)
 
     PG_RETURN_VOID();
 }
+
+
+PG_FUNCTION_INFO_V1(add_edge_annotation);
+Datum
+add_edge_annotation(PG_FUNCTION_ARGS)
+{
+    /* 1. Extract Arguments */
+    int64 edge_id = PG_GETARG_INT64(0);
+    int32 label_id  = PG_GETARG_INT32(1);
+    int32 graph_id  = PG_GETARG_INT32(2);
+    char *annot_str = text_to_cstring(PG_GETARG_TEXT_PP(3));
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    /* 2. Look up the Edge Label Cache */
+    const label_cache_data *label_cache =
+        search_edge_label_graph_id_label_id_cache(graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(label_cache->annotations_tbl))
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("Structural edge label does not support annotations: graph_id=%d, label_id=%d",
+                        graph_id, label_id)));
+
+    /* 3. Resolve the Current Active Schema Array */
+    ArrayType *map_array = NULL;
+    const graph_cache_data *graph_cache = search_graph_id_cache(graph_id);
+
+    if (graph_cache && OidIsValid(graph_cache->annot_schema_phys_map) && OidIsValid(graph_cache->annot_schema_tbl)) {
+        uint32 schema_pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+        ItemPointerData schema_pmap_tid;
+        np_id_to_tid(label_id, schema_pmap_tuples_per_page, &schema_pmap_tid);
+
+        Relation schema_pmap_rel = table_open(graph_cache->annot_schema_phys_map, AccessShareLock);
+        BlockNumber schema_pmap_blk = ItemPointerGetBlockNumber(&schema_pmap_tid);
+        
+        ItemPointerData latest_schema_tid;
+        ItemPointerSetInvalid(&latest_schema_tid);
+
+        if (schema_pmap_blk < RelationGetNumberOfBlocks(schema_pmap_rel)) {
+            Buffer schema_pmap_buf = ReadBuffer(schema_pmap_rel, schema_pmap_blk);
+            LockBuffer(schema_pmap_buf, BUFFER_LOCK_SHARE);
+            Page schema_pmap_page = BufferGetPage(schema_pmap_buf);
+            ItemId schema_pmap_lp = PageGetItemId(schema_pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+
+            if (ItemIdIsNormal(schema_pmap_lp)) {
+                NeoPhysMapRecord *pmap_rec = (NeoPhysMapRecord *) PageGetItem(schema_pmap_page, schema_pmap_lp);
+                latest_schema_tid = pmap_rec->v_itemptr;
+            }
+            UnlockReleaseBuffer(schema_pmap_buf);
+        }
+        table_close(schema_pmap_rel, AccessShareLock);
+
+        if (ItemPointerIsValid(&latest_schema_tid)) {
+            Relation schema_rel = table_open(graph_cache->annot_schema_tbl, AccessShareLock);
+            Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
+            LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+            Page schema_page = BufferGetPage(schema_buf);
+            ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
+
+            if (ItemIdIsNormal(schema_lp)) {
+                NPEntityTupleHeader schema_hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+                map_array = DatumGetArrayTypePCopy(PointerGetDatum(schema_hdr->serialized_entity));
+            }
+            UnlockReleaseBuffer(schema_buf);
+            table_close(schema_rel, AccessShareLock);
+        }
+    }
+
+    if (map_array == NULL) {
+        map_array = label_cache->annotation_map;
+    }
+
+    if (map_array == NULL)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("No annotation schema defined for this structural edge label")));
+
+    /* 4. Map the requested annotation string to its bit position */
+    Datum *map_d;
+    bool *map_n;
+    int map_count;
+    deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+
+    int bit_pos = -1;
+    for (int i = 0; i < map_count; i++) {
+        if (map_n[i]) continue;
+        if (strcmp(annot_str, TextDatumGetCString(map_d[i])) == 0) {
+            bit_pos = i;
+            break;
+        }
+    }
+
+    if (bit_pos == -1)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("Annotation label '%s' is not valid for this structural edge label", annot_str)));
+
+    int byte_size = (map_count + 7) / 8;
+
+    /* 5. Lookup the Edge in its phys_map to get current a_itemptr */
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+    uint32 edge_pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(edge_id, edge_pmap_tuples_per_page, &phys_map_tid);
+
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
+
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Edge ID not found in phys_map (table empty)")));
+    }
+
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Edge ID not found in phys_map")));
+    }
+
+    NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    NeoEdgePhysMapRecord current_pmap_rec = *disk_pmap_rec;
+    UnlockReleaseBuffer(pmap_buf);
+
+    ItemPointerData old_annot_tid = current_pmap_rec.a_itemptr;
+    Relation annot_rel = table_open(label_cache->annotations_tbl, RowExclusiveLock);
+
+    /* DEFENSE: Instantly drop garbage memory pointers from old insert_edge calls */
+    if (ItemPointerIsValid(&old_annot_tid)) {
+        if (ItemPointerGetBlockNumber(&old_annot_tid) >= RelationGetNumberOfBlocks(annot_rel)) {
+            ItemPointerSetInvalid(&old_annot_tid);
+        }
+    }
+
+    /* 6. Read Existing Bitset (or Allocate a Clean One) */
+    bytea *bitset = (bytea *) palloc0(VARHDRSZ + byte_size);
+    SET_VARSIZE(bitset, VARHDRSZ + byte_size);
+    char *bits = VARDATA(bitset);
+
+    if (ItemPointerIsValid(&old_annot_tid) && ItemPointerGetOffsetNumber(&old_annot_tid) != 0) {
+        Buffer obuf_check = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&old_annot_tid));
+        LockBuffer(obuf_check, BUFFER_LOCK_SHARE);
+        Page opage_check = BufferGetPage(obuf_check);
+        ItemId olp_check = PageGetItemId(opage_check, ItemPointerGetOffsetNumber(&old_annot_tid));
+
+        if (ItemIdIsNormal(olp_check)) {
+            NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
+            
+            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+                UnlockReleaseBuffer(obuf_check);
+                table_close(annot_rel, RowExclusiveLock);
+                table_close(pmap_rel, RowExclusiveLock);
+                ereport(ERROR, (errmsg("Edge ID %ld annotation bitset was concurrently updated", edge_id)));
+            }
+
+            bytea *old_bitset = (bytea *) old_hdr->serialized_entity;
+            int old_len = VARSIZE(old_bitset) - VARHDRSZ;
+            memcpy(bits, VARDATA(old_bitset), old_len > byte_size ? byte_size : old_len);
+        }
+        UnlockReleaseBuffer(obuf_check);
+    }
+
+    /* 7. Set the requested bit */
+    bits[bit_pos / 8] |= (1 << (bit_pos % 8));
+
+    /* 8. Construct & Write New Annotation Entity Tuple */
+    Size annot_payload_size = VARSIZE(bitset);
+    Size annot_total_size = MAXALIGN(SizeOfNPEntityTupleHeader + annot_payload_size);
+
+    char *annot_tuple_buf = (char *) palloc0(annot_total_size);
+    NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) annot_tuple_buf;
+
+    annot_hdr->xmin = current_fxid;
+    annot_hdr->xmax = InvalidFullTransactionId;
+    annot_hdr->cmin = cid;
+    annot_hdr->cmax = InvalidCommandId;
+    annot_hdr->prev_itemptr = old_annot_tid;
+    annot_hdr->flags = 0;
+    annot_hdr->id = edge_id;
+
+    memcpy(annot_hdr->serialized_entity, bitset, annot_payload_size);
+
+    ItemPointerData new_annot_tid;
+    np_write_record_to_page(annot_rel, annot_tuple_buf, annot_total_size, &new_annot_tid);
+    pfree(annot_tuple_buf);
+
+    /* 9. Update the Edge phys_map safely using WAL */
+    Buffer overwrite_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(overwrite_buf, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(pmap_rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, overwrite_buf, 0);
+    NeoEdgePhysMapRecord *wal_rec = (NeoEdgePhysMapRecord *) PageGetItem(wal_page, 
+                                      PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&phys_map_tid)));
+    
+    wal_rec->a_itemptr = new_annot_tid;
+    
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(overwrite_buf);
+    table_close(pmap_rel, RowExclusiveLock);
+
+    /* 10. MVCC Tombstone the OLD Annotation Tuple */
+    if (ItemPointerIsValid(&old_annot_tid) && ItemPointerGetOffsetNumber(&old_annot_tid) != 0) {
+        Buffer obuf_final = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&old_annot_tid));
+        LockBuffer(obuf_final, BUFFER_LOCK_EXCLUSIVE);
+
+        state = GenericXLogStart(annot_rel);
+        wal_page = GenericXLogRegisterBuffer(state, obuf_final, 0);
+
+        ItemId olp_final = PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&old_annot_tid));
+        NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, olp_final);
+
+        wal_old_hdr->xmax = current_fxid;
+        wal_old_hdr->cmax = cid;
+
+        GenericXLogFinish(state);
+        UnlockReleaseBuffer(obuf_final);
+    }
+
+    table_close(annot_rel, RowExclusiveLock);
+
+    PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(remove_edge_annotation);
+Datum
+remove_edge_annotation(PG_FUNCTION_ARGS)
+{
+    /* 1. Extract Arguments */
+    int64 edge_id = PG_GETARG_INT64(0);
+    int32 label_id  = PG_GETARG_INT32(1);
+    int32 graph_id  = PG_GETARG_INT32(2);
+    char *annot_str = text_to_cstring(PG_GETARG_TEXT_PP(3));
+
+    CommandId cid = GetCurrentCommandId(true);
+    FullTransactionId current_fxid = GetTopFullTransactionId();
+
+    /* 2. Look up the Edge Label Cache */
+    const label_cache_data *label_cache =
+        search_edge_label_graph_id_label_id_cache(graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(label_cache->annotations_tbl))
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("Structural edge label does not support annotations: graph_id=%d, label_id=%d",
+                        graph_id, label_id)));
+
+    /* 3. Resolve the Current Active Schema Array */
+    ArrayType *map_array = NULL;
+    const graph_cache_data *graph_cache = search_graph_id_cache(graph_id);
+
+    if (graph_cache && OidIsValid(graph_cache->annot_schema_phys_map) && OidIsValid(graph_cache->annot_schema_tbl)) {
+        uint32 schema_pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+        ItemPointerData schema_pmap_tid;
+        np_id_to_tid(label_id, schema_pmap_tuples_per_page, &schema_pmap_tid);
+
+        Relation schema_pmap_rel = table_open(graph_cache->annot_schema_phys_map, AccessShareLock);
+        BlockNumber schema_pmap_blk = ItemPointerGetBlockNumber(&schema_pmap_tid);
+        
+        ItemPointerData latest_schema_tid;
+        ItemPointerSetInvalid(&latest_schema_tid);
+
+        if (schema_pmap_blk < RelationGetNumberOfBlocks(schema_pmap_rel)) {
+            Buffer schema_pmap_buf = ReadBuffer(schema_pmap_rel, schema_pmap_blk);
+            LockBuffer(schema_pmap_buf, BUFFER_LOCK_SHARE);
+            Page schema_pmap_page = BufferGetPage(schema_pmap_buf);
+            ItemId schema_pmap_lp = PageGetItemId(schema_pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+
+            if (ItemIdIsNormal(schema_pmap_lp)) {
+                NeoPhysMapRecord *pmap_rec = (NeoPhysMapRecord *) PageGetItem(schema_pmap_page, schema_pmap_lp);
+                latest_schema_tid = pmap_rec->v_itemptr;
+            }
+            UnlockReleaseBuffer(schema_pmap_buf);
+        }
+        table_close(schema_pmap_rel, AccessShareLock);
+
+        if (ItemPointerIsValid(&latest_schema_tid)) {
+            Relation schema_rel = table_open(graph_cache->annot_schema_tbl, AccessShareLock);
+            Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
+            LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+            Page schema_page = BufferGetPage(schema_buf);
+            ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
+
+            if (ItemIdIsNormal(schema_lp)) {
+                NPEntityTupleHeader schema_hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+                map_array = DatumGetArrayTypePCopy(PointerGetDatum(schema_hdr->serialized_entity));
+            }
+            UnlockReleaseBuffer(schema_buf);
+            table_close(schema_rel, AccessShareLock);
+        }
+    }
+
+    if (map_array == NULL) {
+        map_array = label_cache->annotation_map;
+    }
+
+    if (map_array == NULL)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("No annotation schema defined for this structural edge label")));
+
+    /* 4. Map the requested annotation string to its bit position */
+    Datum *map_d;
+    bool *map_n;
+    int map_count;
+    deconstruct_array(map_array, TEXTOID, -1, false, 'i', &map_d, &map_n, &map_count);
+
+    int bit_pos = -1;
+    for (int i = 0; i < map_count; i++) {
+        if (map_n[i]) continue;
+        if (strcmp(annot_str, TextDatumGetCString(map_d[i])) == 0) {
+            bit_pos = i;
+            break;
+        }
+    }
+
+    if (bit_pos == -1)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("Annotation label '%s' is not valid for this structural edge label", annot_str)));
+
+    int byte_size = (map_count + 7) / 8;
+
+    /* 5. Lookup the Edge in its phys_map to get current a_itemptr */
+    Relation pmap_rel = table_open(label_cache->phys_map, RowExclusiveLock);
+    uint32 edge_pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData phys_map_tid;
+    np_id_to_tid(edge_id, edge_pmap_tuples_per_page, &phys_map_tid);
+
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&phys_map_tid);
+
+    if (pmap_blk >= RelationGetNumberOfBlocks(pmap_rel)) {
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Edge ID not found in phys_map (table empty)")));
+    }
+
+    Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    Page pmap_page = BufferGetPage(pmap_buf);
+    ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+
+    if (!ItemIdIsNormal(pmap_lp)) {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("Edge ID not found in phys_map")));
+    }
+
+    NeoEdgePhysMapRecord *disk_pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    NeoEdgePhysMapRecord current_pmap_rec = *disk_pmap_rec;
+    UnlockReleaseBuffer(pmap_buf);
+
+    ItemPointerData old_annot_tid = current_pmap_rec.a_itemptr;
+    Relation annot_rel = table_open(label_cache->annotations_tbl, RowExclusiveLock);
+
+    /* DEFENSE: Instantly drop garbage memory pointers from old insert_edge calls */
+    if (ItemPointerIsValid(&old_annot_tid)) {
+        if (ItemPointerGetBlockNumber(&old_annot_tid) >= RelationGetNumberOfBlocks(annot_rel)) {
+            ItemPointerSetInvalid(&old_annot_tid);
+        }
+    }
+
+    /* 6. Read Existing Bitset */
+    bytea *bitset = (bytea *) palloc0(VARHDRSZ + byte_size);
+    SET_VARSIZE(bitset, VARHDRSZ + byte_size);
+    char *bits = VARDATA(bitset);
+
+    if (ItemPointerIsValid(&old_annot_tid) && ItemPointerGetOffsetNumber(&old_annot_tid) != 0) {
+        Buffer obuf_check = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&old_annot_tid));
+        LockBuffer(obuf_check, BUFFER_LOCK_SHARE);
+        Page opage_check = BufferGetPage(obuf_check);
+        ItemId olp_check = PageGetItemId(opage_check, ItemPointerGetOffsetNumber(&old_annot_tid));
+
+        if (ItemIdIsNormal(olp_check)) {
+            NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
+            
+            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+                UnlockReleaseBuffer(obuf_check);
+                table_close(annot_rel, RowExclusiveLock);
+                table_close(pmap_rel, RowExclusiveLock);
+                ereport(ERROR, (errmsg("Edge ID %ld annotation bitset was concurrently updated", edge_id)));
+            }
+
+            bytea *old_bitset = (bytea *) old_hdr->serialized_entity;
+            int old_len = VARSIZE(old_bitset) - VARHDRSZ;
+            memcpy(bits, VARDATA(old_bitset), old_len > byte_size ? byte_size : old_len);
+        }
+        UnlockReleaseBuffer(obuf_check);
+    }
+
+    /* 7. Clear the requested bit using AND with inverted mask */
+    bits[bit_pos / 8] &= ~(1 << (bit_pos % 8));
+
+    /* 8. Construct & Write New Annotation Entity Tuple */
+    Size annot_payload_size = VARSIZE(bitset);
+    Size annot_total_size = MAXALIGN(SizeOfNPEntityTupleHeader + annot_payload_size);
+
+    char *annot_tuple_buf = (char *) palloc0(annot_total_size);
+    NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) annot_tuple_buf;
+
+    annot_hdr->xmin = current_fxid;
+    annot_hdr->xmax = InvalidFullTransactionId;
+    annot_hdr->cmin = cid;
+    annot_hdr->cmax = InvalidCommandId;
+    annot_hdr->prev_itemptr = old_annot_tid;
+    annot_hdr->flags = 0;
+    annot_hdr->id = edge_id;
+
+    memcpy(annot_hdr->serialized_entity, bitset, annot_payload_size);
+
+    ItemPointerData new_annot_tid;
+    np_write_record_to_page(annot_rel, annot_tuple_buf, annot_total_size, &new_annot_tid);
+    pfree(annot_tuple_buf);
+
+    /* 9. Update the Edge phys_map safely using WAL */
+    Buffer overwrite_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(overwrite_buf, BUFFER_LOCK_EXCLUSIVE);
+    
+    GenericXLogState *state = GenericXLogStart(pmap_rel);
+    Page wal_page = GenericXLogRegisterBuffer(state, overwrite_buf, 0);
+    NeoEdgePhysMapRecord *wal_rec = (NeoEdgePhysMapRecord *) PageGetItem(wal_page, 
+                                      PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&phys_map_tid)));
+    
+    wal_rec->a_itemptr = new_annot_tid;
+    
+    GenericXLogFinish(state);
+    UnlockReleaseBuffer(overwrite_buf);
+    table_close(pmap_rel, RowExclusiveLock);
+
+    /* 10. MVCC Tombstone the OLD Annotation Tuple */
+    if (ItemPointerIsValid(&old_annot_tid) && ItemPointerGetOffsetNumber(&old_annot_tid) != 0) {
+        Buffer obuf_final = ReadBuffer(annot_rel, ItemPointerGetBlockNumber(&old_annot_tid));
+        LockBuffer(obuf_final, BUFFER_LOCK_EXCLUSIVE);
+
+        state = GenericXLogStart(annot_rel);
+        wal_page = GenericXLogRegisterBuffer(state, obuf_final, 0);
+
+        ItemId olp_final = PageGetItemId(wal_page, ItemPointerGetOffsetNumber(&old_annot_tid));
+        NPEntityTupleHeader wal_old_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, olp_final);
+
+        wal_old_hdr->xmax = current_fxid;
+        wal_old_hdr->cmax = cid;
+
+        GenericXLogFinish(state);
+        UnlockReleaseBuffer(obuf_final);
+    }
+
+    table_close(annot_rel, RowExclusiveLock);
+
+    PG_RETURN_VOID();
+}
+
 
 /*
  * Checks if any other independent root label (_.label_name) in the ltree hierarchy

@@ -112,3 +112,42 @@ SELECT remove_edge_label(1::int8, 8, 31, 'promoted'::text);
 
 -- Verify it properly migrated back to the original table
 SELECT * FROM np_edge_31_4 WHERE id = 1;
+
+--
+-- Edge Annotations Tests
+--
+
+-- 1. Create a new edge label equipped with an annotation schema
+SELECT create_elabel('edge_graph', 'friend', 'public', ARRAY['close', 'distant']);
+
+-- 2. Insert a new edge (Edge ID 2, Label ID 9) between Vertex 1 and 2
+SELECT insert_edge(
+    vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
+    edge_build(2::int8, 31, 9, 0::smallint, 
+        vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
+        '{"met": "college"}'::gtype
+    )
+);
+
+-- 3. Initial State: Output should show base label "friend"
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+
+-- 4. Mutation: Add the 'close' annotation
+SELECT add_edge_annotation(2::int8, 9, 31, 'close');
+
+-- 4a. Prove Binary State: Entity Store should hold the updated bitset
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+
+-- 4b. Prove String State: edge_out should dynamically append ":close"
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+
+-- 5. Teardown: Remove the 'close' annotation
+SELECT remove_edge_annotation(2::int8, 9, 31, 'close');
+
+-- 5a. Prove Binary State: Entity Store bitset should revert
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+
+-- 5b. Prove String State: edge_out should revert to base label "friend"
+SELECT * FROM np_edge_31_9 WHERE id = 2;

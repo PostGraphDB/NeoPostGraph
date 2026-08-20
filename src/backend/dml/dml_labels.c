@@ -106,6 +106,46 @@ typedef struct {
     int32 maxitems;
     MigratorAdjListMember data[FLEXIBLE_ARRAY_MEMBER];
 } MigratorAdjList;
+static ArrayType *merge_and_dedupe_text_arrays(ArrayType *arr1, ArrayType *arr2)
+{
+    if (!arr1 && !arr2) return NULL;
+    if (!arr1) return arr2;
+    if (!arr2) return arr1;
+
+    Datum *d1, *d2;
+    bool *n1, *n2;
+    int c1, c2;
+
+    deconstruct_array(arr1, TEXTOID, -1, false, 'i', &d1, &n1, &c1);
+    deconstruct_array(arr2, TEXTOID, -1, false, 'i', &d2, &n2, &c2);
+
+    Datum *d_out = palloc((c1 + c2) * sizeof(Datum));
+    int c_out = 0;
+
+    for (int i = 0; i < c1; i++) {
+        if (n1[i]) continue;
+        d_out[c_out++] = d1[i];
+    }
+
+    for (int i = 0; i < c2; i++) {
+        if (n2[i]) continue;
+        char *s2 = TextDatumGetCString(d2[i]);
+        bool duplicate = false;
+        
+        for (int j = 0; j < c_out; j++) {
+            char *s1 = TextDatumGetCString(d_out[j]);
+            if (strcmp(s1, s2) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        
+        if (!duplicate) d_out[c_out++] = d2[i];
+    }
+
+    if (c_out == 0) return NULL;
+    return construct_array(d_out, c_out, TEXTOID, -1, false, 'i');
+}
 
 static int32 
 resolve_or_create_target_label(int32 graph_id, int32 current_label_id, const char *new_label_str, 
@@ -1251,9 +1291,14 @@ set_edge_label(PG_FUNCTION_ARGS)
     if (!current_label_cache) 
         ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT), errmsg("edge label %d not found", current_label_id)));
 
-    /* 1. Resolve Target Edge Label */
+    /* SAFEGUARD 1: Extract OIDs to the local stack BEFORE target creation overwrites the cache struct */
+    Oid safe_old_physmap_oid = current_label_cache->phys_map;
+    Oid safe_old_edge_tbl_oid = current_label_cache->vertex_tbl;
+
+    /* SAFEGUARD 2: Extract LTREE so the pointer isn't corrupted */
     char *raw_current_ltree = DatumGetCString(DirectFunctionCall1(ltree_out, PointerGetDatum(current_label_cache->label)));
     
+    /* 1. Resolve Target Edge Label */
     int32 target_label_id = resolve_or_create_target_edge_label(graph_id, current_label_id, new_label_str, graph_cache, raw_current_ltree);
     
     if (target_label_id == current_label_id) {
@@ -1262,10 +1307,7 @@ set_edge_label(PG_FUNCTION_ARGS)
     }
     pfree(raw_current_ltree);
 
-    /* 2. Fetch Old Edge Payload via Edge Phys Map */
-    Oid safe_old_physmap_oid = current_label_cache->phys_map;
-    Oid safe_old_edge_tbl_oid = current_label_cache->vertex_tbl; // Make sure this matches your edge cache struct field
-
+    /* 2. Fetch Old Edge Payload via Edge Phys Map using SAFE OIDs */
     Relation old_physmap_rel = table_open(safe_old_physmap_oid, AccessShareLock);
     uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
     ItemPointerData phys_map_tid;
@@ -1303,7 +1345,6 @@ set_edge_label(PG_FUNCTION_ARGS)
     new_unpacked->label_id = target_label_id;
 
     /* 4. Tombstone the Old Edge AND its Adjacency Links */
-    // This safely handles the Entity table, the Phys Map, AND the vertex linked lists.
     np_internal_delete_edge(graph_id, current_label_id, edge_id, cid, current_fxid);
 
     /* 5. Force Postgres to recognize the tombstone and newly forged tables */
@@ -1348,10 +1389,10 @@ resolve_or_create_target_edge_label(int32 graph_id, int32 current_label_id, cons
     PopActiveSnapshot();
 
     if (base_label_id == -1) {
-        base_label_id = create_elabel_internal(NameStr(graph_cache->name), new_label_str, NULL, NULL); 
+        base_label_id = create_elabel_internal(NameStr(graph_cache->name), new_label_str, NULL, NULL, NULL); 
         CommandCounterIncrement();
     }
-
+    
     /* 2. Determine target path */
     char *merged_ltree_str = NULL;
 
@@ -1404,13 +1445,36 @@ resolve_or_create_target_edge_label(int32 graph_id, int32 current_label_id, cons
         Oid phys_map = create_label_edge_physical_mapping_table(
                             psprintf("np_edge_%d_%d_phys_map", graph_cache->id, target_label_id), graph_cache->namespace);
 
+        const label_cache_data *curr_lbl = search_edge_label_graph_id_label_id_cache(graph_id, current_label_id);
+        const label_cache_data *base_lbl = search_edge_label_graph_id_label_id_cache(graph_id, base_label_id);
+        
+        ArrayType *merged_array = merge_and_dedupe_text_arrays(
+            curr_lbl ? curr_lbl->annotation_map : NULL,
+            base_lbl ? base_lbl->annotation_map : NULL
+        );
+        
+        Datum merged_array_datum = (merged_array != NULL) ? PointerGetDatum(merged_array) : (Datum)0;
+        Oid annot_tbl_oid = InvalidOid;
+        
+        if (merged_array != NULL) {
+            int byte_alloc = (ArrayGetNItems(ARR_NDIM(merged_array), ARR_DIMS(merged_array)) + 7) / 8;
+            annot_tbl_oid = create_vertex_label_annotation_table(
+                                psprintf("np_edge_annotations_%d_%d", graph_cache->id, target_label_id), 
+                                graph_cache->namespace, byte_alloc);
+            insert_annotation_schema(graph_cache->id, target_label_id, merged_array, 
+                                     graph_cache->annot_schema_tbl, graph_cache->annot_schema_phys_map);
+        }
+        /* ------------------------------------- */
+
         /* Write the EXACT computed string directly into the catalog */
         insert_label(
             psprintf("np_edge_label_%d", graph_cache->id),
             target_ltree_datum,
             target_label_id,
             edge_tbl,
-            phys_map
+            phys_map,
+            annot_tbl_oid,
+            merged_array_datum
         );
 
         CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
@@ -1490,12 +1554,33 @@ resolve_target_edge_label_for_removal(int32 graph_id, int32 current_label_id, co
         Oid phys_map = create_label_edge_physical_mapping_table(
                             psprintf("np_edge_%d_%d_phys_map", graph_cache->id, target_label_id), graph_cache->namespace);
 
+
+        const label_cache_data *curr_lbl = search_edge_label_graph_id_label_id_cache(graph_id, current_label_id);
+        ArrayType *merged_array = NULL;
+        if (curr_lbl && curr_lbl->annotation_map) {
+            merged_array = merge_and_dedupe_text_arrays(curr_lbl->annotation_map, NULL);
+        }
+        
+        Datum merged_array_datum = (merged_array != NULL) ? PointerGetDatum(merged_array) : (Datum)0;
+        Oid annot_tbl_oid = InvalidOid;
+
+        if (merged_array != NULL) {
+            int byte_alloc = (ArrayGetNItems(ARR_NDIM(merged_array), ARR_DIMS(merged_array)) + 7) / 8;
+            annot_tbl_oid = create_vertex_label_annotation_table(
+                                psprintf("np_edge_annotations_%d_%d", graph_cache->id, target_label_id), 
+                                graph_cache->namespace, byte_alloc);
+            insert_annotation_schema(graph_cache->id, target_label_id, merged_array, 
+                                     graph_cache->annot_schema_tbl, graph_cache->annot_schema_phys_map);
+        }
+
         insert_label(
             psprintf("np_edge_label_%d", graph_cache->id),
             target_ltree_datum,
             target_label_id,
             edge_tbl,
-            phys_map
+            phys_map,
+            annot_tbl_oid,
+            merged_array_datum
         );
 
         CreateSeqStmt *seq_stmt = makeNode(CreateSeqStmt);
@@ -1514,7 +1599,6 @@ resolve_target_edge_label_for_removal(int32 graph_id, int32 current_label_id, co
     pfree(new_path.data);
     return target_label_id;
 }
-
 PG_FUNCTION_INFO_V1(remove_edge_label);
 Datum
 remove_edge_label(PG_FUNCTION_ARGS)
