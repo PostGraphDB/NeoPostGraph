@@ -17,19 +17,24 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/htup_details.h"
 #include "access/xact.h"
+#include "catalog/dependency.h"
+#include "catalog/indexing.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_namespace.h"
+#include "commands/alter.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
+#include "utils/fmgroids.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
-
-#include "catalog/indexing.h"
+#include "utils/syscache.h"
 
 #include "catalog/np_graph.h"
 #include "catalog/np_label.h"
@@ -114,4 +119,225 @@ void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid 
     table_close(rel, RowExclusiveLock);
 
     CommandCounterIncrement();
+}
+
+static void
+np_append_oid(List **oids, Datum d, bool isnull)
+{
+    Oid oid;
+
+    if (isnull)
+        return;
+    oid = DatumGetObjectId(d);
+    if (OidIsValid(oid))
+        *oids = lappend_oid(*oids, oid);
+}
+
+static void
+np_collect_regclass_col(Relation rel, HeapTuple tuple, AttrNumber attno, List **oids)
+{
+    bool isnull;
+    Datum d = heap_getattr(tuple, attno, RelationGetDescr(rel), &isnull);
+
+    np_append_oid(oids, d, isnull);
+}
+
+static void
+np_collect_linked_list_tables(Oid meta_oid, List **oids)
+{
+    Relation meta_rel;
+    SysScanDesc scan;
+    HeapTuple tuple;
+
+    if (!OidIsValid(meta_oid))
+        return;
+
+    meta_rel = table_open(meta_oid, AccessShareLock);
+    scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+        np_collect_regclass_col(meta_rel, tuple, 2, oids);
+    systable_endscan(scan);
+    table_close(meta_rel, AccessShareLock);
+}
+
+static List *
+np_collect_graph_namespace_rels(const graph_cache_data *graph)
+{
+    List *oids = NIL;
+    Relation cat;
+    SysScanDesc scan;
+    HeapTuple tuple;
+
+    np_append_oid(&oids, ObjectIdGetDatum(graph->vertex_id_seq), false);
+    np_append_oid(&oids, ObjectIdGetDatum(graph->edge_id_seq), false);
+    np_append_oid(&oids, ObjectIdGetDatum(graph->annot_schema_tbl), false);
+    np_append_oid(&oids, ObjectIdGetDatum(graph->annot_schema_phys_map), false);
+
+    cat = table_open(graph->vertex_labels, AccessShareLock);
+    scan = systable_beginscan(cat, InvalidOid, false, NULL, 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+    {
+        bool isnull;
+        Oid ll_meta;
+
+        /* tbl, phys_map, linked_list_meta, linked_list_seq, arraylist, annotations_tbl */
+        np_collect_regclass_col(cat, tuple, 3, &oids);
+        np_collect_regclass_col(cat, tuple, 4, &oids);
+        np_collect_regclass_col(cat, tuple, 5, &oids);
+        np_collect_regclass_col(cat, tuple, 6, &oids);
+        np_collect_regclass_col(cat, tuple, 7, &oids);
+        np_collect_regclass_col(cat, tuple, 8, &oids);
+
+        ll_meta = DatumGetObjectId(heap_getattr(tuple, 5, RelationGetDescr(cat), &isnull));
+        if (!isnull && OidIsValid(ll_meta))
+            np_collect_linked_list_tables(ll_meta, &oids);
+    }
+    systable_endscan(scan);
+    table_close(cat, AccessShareLock);
+
+    cat = table_open(graph->edge_labels, AccessShareLock);
+    scan = systable_beginscan(cat, InvalidOid, false, NULL, 0, NULL);
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+    {
+        /* tbl, phys_map, annotations_tbl */
+        np_collect_regclass_col(cat, tuple, 3, &oids);
+        np_collect_regclass_col(cat, tuple, 4, &oids);
+        np_collect_regclass_col(cat, tuple, 5, &oids);
+    }
+    systable_endscan(scan);
+    table_close(cat, AccessShareLock);
+
+    return oids;
+}
+
+static void
+np_move_rel_to_namespace(Oid relid, Oid old_nsp, Oid new_nsp, ObjectAddresses *moved)
+{
+    if (!OidIsValid(relid))
+        return;
+    if (get_rel_namespace(relid) != old_nsp)
+        return;
+    AlterObjectNamespace_oid(RelationRelationId, relid, new_nsp, moved);
+}
+
+PG_FUNCTION_INFO_V1(alter_graph);
+Datum
+alter_graph(PG_FUNCTION_ARGS)
+{
+    char *graph_name;
+    char *new_nsp_str;
+    Oid old_nsp;
+    Oid new_nsp;
+    const graph_cache_data *graph;
+    List *oids;
+    ListCell *lc;
+    ObjectAddresses *moved;
+    Relation np_graph;
+    ScanKeyData skey[2];
+    SysScanDesc scan;
+    HeapTuple old_tup;
+    HeapTuple new_tup;
+    Datum values[9];
+    bool nulls[9];
+    bool replace[9];
+    NameData name_data;
+    int moved_count = 0;
+
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("new namespace must not be NULL")));
+
+    graph_name = NameStr(*PG_GETARG_NAME(0));
+    new_nsp_str = TextDatumGetCString(PG_GETARG_DATUM(1));
+
+    if (PG_ARGISNULL(2))
+    {
+        List *search_path = fetch_search_path(false);
+        if (list_length(search_path) < 1)
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("alter_graph requires a search path when namespace is not specified")));
+        old_nsp = linitial_oid(search_path);
+    }
+    else
+    {
+        char *old_nsp_str = TextDatumGetCString(PG_GETARG_DATUM(2));
+        old_nsp = get_namespace_oid(old_nsp_str, true);
+        if (!OidIsValid(old_nsp))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("namespace \"%s\" does not exist", old_nsp_str)));
+    }
+
+    graph = search_graph_name_namespace_cache(graph_name, old_nsp);
+    if (!graph)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" does not exist in the namespace \"%s\"",
+                               graph_name, get_namespace_name(old_nsp))));
+
+    new_nsp = get_namespace_oid(new_nsp_str, true);
+    if (!OidIsValid(new_nsp))
+    {
+        new_nsp = NamespaceCreate(new_nsp_str, GetUserId(), false);
+        CommandCounterIncrement();
+    }
+
+    if (new_nsp == old_nsp)
+    {
+        ereport(NOTICE, (errmsg("graph \"%s\" is already in namespace \"%s\"",
+                                graph_name, get_namespace_name(new_nsp))));
+        PG_RETURN_VOID();
+    }
+
+    if (search_graph_name_namespace_cache(graph_name, new_nsp))
+        ereport(ERROR, (errcode(ERRCODE_DUPLICATE_SCHEMA),
+                        errmsg("graph \"%s\" already exists in the namespace \"%s\"",
+                               graph_name, get_namespace_name(new_nsp))));
+
+    oids = np_collect_graph_namespace_rels(graph);
+    moved = new_object_addresses();
+    foreach(lc, oids)
+    {
+        Oid relid = lfirst_oid(lc);
+        Oid before = get_rel_namespace(relid);
+
+        np_move_rel_to_namespace(relid, old_nsp, new_nsp, moved);
+        if (before == old_nsp && get_rel_namespace(relid) == new_nsp)
+            moved_count++;
+    }
+    free_object_addresses(moved);
+    list_free(oids);
+
+    np_graph = table_open(np_graph_relation_id(), RowExclusiveLock);
+    namestrcpy(&name_data, graph_name);
+    ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_data));
+    ScanKeyInit(&skey[1], 3, BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(old_nsp));
+    scan = systable_beginscan(np_graph, np_graph_name_namespace_index_id(), true, NULL, 2, skey);
+    old_tup = systable_getnext(scan);
+    if (!HeapTupleIsValid(old_tup))
+    {
+        systable_endscan(scan);
+        table_close(np_graph, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" catalog row not found", graph_name)));
+    }
+
+    memset(values, 0, sizeof(values));
+    memset(nulls, false, sizeof(nulls));
+    memset(replace, false, sizeof(replace));
+    values[2] = ObjectIdGetDatum(new_nsp);
+    replace[2] = true;
+    new_tup = heap_modify_tuple(old_tup, RelationGetDescr(np_graph), values, nulls, replace);
+    CatalogTupleUpdate(np_graph, &old_tup->t_self, new_tup);
+    heap_freetuple(new_tup);
+    systable_endscan(scan);
+    table_close(np_graph, RowExclusiveLock);
+    CommandCounterIncrement();
+
+    invalidate_graph_name_namespace_cache_entry(graph_name, old_nsp);
+
+    ereport(NOTICE, (errmsg("graph \"%s\" moved from namespace \"%s\" to \"%s\" (%d relation(s))",
+                            graph_name, get_namespace_name(old_nsp), get_namespace_name(new_nsp), moved_count)));
+    PG_RETURN_VOID();
 }

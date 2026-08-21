@@ -449,3 +449,8 @@ CREATE FUNCTION create_graph(graph_name Name, namespace text DEFAULT NULL)
 RETURNS void 
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION alter_graph(graph_name Name, new_namespace text, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';

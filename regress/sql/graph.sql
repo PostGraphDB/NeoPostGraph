@@ -113,6 +113,44 @@ SELECT NeoPostGraph.create_graph('search_path_conflict');
 SELECT NeoPostGraph.create_graph('search_path_conflict');
 
 ---
+--- alter_graph: move relations in the graph namespace, leave neopostgraph catalogs
+---
+SELECT NeoPostGraph.create_graph('alter_move', 'public');
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'alter_move';
+
+SELECT NeoPostGraph.alter_graph('alter_move', 'other_schema', 'public');
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'alter_move';
+
+SELECT n.nspname
+FROM NeoPostGraph.np_graph g
+JOIN pg_class c ON c.relname = 'np_annotation_schema_' || g.id::text
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE g.name = 'alter_move';
+
+SELECT n.nspname
+FROM NeoPostGraph.np_graph g
+JOIN pg_class c ON c.oid = g.vertex_labels
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE g.name = 'alter_move';
+
+SELECT n.nspname
+FROM NeoPostGraph.np_graph g
+JOIN pg_class c ON c.oid = g.vertex_id_seq
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE g.name = 'alter_move';
+
+-- already in destination
+SELECT NeoPostGraph.alter_graph('alter_move', 'other_schema', 'other_schema');
+
+-- name collision in destination
+SELECT NeoPostGraph.create_graph('alter_dup', 'other_schema');
+SELECT NeoPostGraph.create_graph('alter_dup', 'public');
+SELECT NeoPostGraph.alter_graph('alter_dup', 'other_schema', 'public');
+
+-- missing graph
+SELECT NeoPostGraph.alter_graph('no_such_graph', 'other_schema', 'public');
+
+---
 --- Verification
 ---
 SELECT * FROM NeoPostGraph.np_graph;

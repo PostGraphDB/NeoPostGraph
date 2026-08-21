@@ -15,8 +15,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */ 
 LOAD 'neopostgraph';
-
-
 -- Setup the graph
 SELECT NeoPostGraph.create_graph('label_graph', 'public');
 NOTICE:  graph "label_graph" has been created
@@ -24,7 +22,6 @@ NOTICE:  graph "label_graph" has been created
 --------------
  
 (1 row)
-
 
 -- Standard labels
 SELECT NeoPostGraph.create_vlabel('label_graph', 'person');
@@ -40,7 +37,6 @@ NOTICE:  vlabel "software" has been created
 ---------------
  
 (1 row)
-
 
 -- Creating Label Trees
 SELECT NeoPostGraph.create_vlabel('label_graph', 'employee');
@@ -85,14 +81,12 @@ NOTICE:  Merged vlabel "_.person.contractor" has been created
  
 (1 row)
 
-
 SELECT NeoPostGraph.create_graph('edge_case_graph', 'public');
 NOTICE:  graph "edge_case_graph" has been created
  create_graph 
 --------------
  
 (1 row)
-
 
 -- Testing the "_" naming logic
 SELECT NeoPostGraph.create_vlabel('edge_case_graph', '_internal');
@@ -109,7 +103,6 @@ NOTICE:  vlabel "test_label_123" has been created
  
 (1 row)
 
-
 -- Unicode/Multi-byte labels (to match your previous tests)
 SELECT NeoPostGraph.create_vlabel('edge_case_graph', '인간'); 
 NOTICE:  vlabel "인간" has been created
@@ -118,14 +111,12 @@ NOTICE:  vlabel "인간" has been created
  
 (1 row)
 
-
 SELECT NeoPostGraph.create_graph('match_test_graph', 'public');
 NOTICE:  graph "match_test_graph" has been created
  create_graph 
 --------------
  
 (1 row)
-
 
 SELECT NeoPostGraph.create_vlabel('match_test_graph', 'user');
 NOTICE:  vlabel "user" has been created
@@ -155,7 +146,6 @@ NOTICE:  vlabel "users" has been created
  
 (1 row)
 
-
 -- Force the planner to use the gist index
 SET enable_seqscan = off;
 EXPLAIN (COSTS OFF)
@@ -166,7 +156,6 @@ WHERE graph_id = 16
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 3: FROM NeoPostGraph.np_vertex_label 
              ^
-
 SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
@@ -174,7 +163,6 @@ WHERE graph_id = 16
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 2: FROM NeoPostGraph.np_vertex_label 
              ^
-
 SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
@@ -182,7 +170,6 @@ WHERE graph_id = 16
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 2: FROM NeoPostGraph.np_vertex_label 
              ^
-
 ---
 -- get_vlabel_ids (uses the index from the above 3 queries)
 -- (Precursor to ltree @ 'label1 & label2 ...' operator and syntax when we start building language contructs)
@@ -196,14 +183,12 @@ SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['employee']::text[]);
               7
 (3 rows)
 
-
 -- 2. Test multi-label AND logic
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person', 'engineer']::text[]);
  get_vlabel_ids 
 ----------------
               7
 (1 row)
-
 
 -- 3. Test Partial match / Sub-path match
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person']::text[]);
@@ -215,26 +200,21 @@ SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['person']::text[]);
               9
 (4 rows)
 
-
 -- 4. Test non-existent label in existing graph
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY['manager']::text[]);
  get_vlabel_ids 
 ----------------
 (0 rows)
 
-
 -- 5. Test existing label in non-existent graph
 SELECT NeoPostGraph.get_vlabel_ids('missing_graph', ARRAY['person']::text[]);
 ERROR:  graph "missing_graph" does not exist in namespace "public"
-
 -- 6. Test empty array input
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', ARRAY[]::text[]);
 ERROR:  label array must not be empty
-
 -- 7. Test NULL label
 SELECT NeoPostGraph.get_vlabel_ids('label_graph', NULL);
 ERROR:  label array must not be NULL
-
 -- 8. Test exact match on underscores/numbers
 SELECT NeoPostGraph.get_vlabel_ids('edge_case_graph', ARRAY['test_label_123']::text[]);
  get_vlabel_ids 
@@ -242,15 +222,12 @@ SELECT NeoPostGraph.get_vlabel_ids('edge_case_graph', ARRAY['test_label_123']::t
               3
 (1 row)
 
-
 -- 9. Test multi-byte/Unicode resolution
 SELECT NeoPostGraph.get_vlabel_ids('edge_case_graph', ARRAY['인간']::text[]);
  get_vlabel_ids 
 ----------------
               4
 (1 row)
-
-
 
 EXPLAIN (COSTS OFF)
 SELECT *
@@ -260,7 +237,6 @@ WHERE graph_id = 16
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 3: FROM NeoPostGraph.np_vertex_label 
              ^
-
 SELECT *
 FROM NeoPostGraph.np_vertex_label 
 WHERE graph_id = 16 
@@ -268,7 +244,6 @@ WHERE graph_id = 16
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 2: FROM NeoPostGraph.np_vertex_label 
              ^
-
 -- OR logic check
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'software']::text[]);
  get_or_vlabel_ids 
@@ -277,7 +252,6 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'software
                  6
                  7
 (3 rows)
-
 
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['employee', 'software']::text[]);
  get_or_vlabel_ids 
@@ -288,7 +262,6 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['employee', 'software
                  7
 (4 rows)
 
-
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'contractor']::text[]);
  get_or_vlabel_ids 
 -------------------
@@ -298,7 +271,6 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'contract
                  9
 (4 rows)
 
-
 -- OR logic check with non-existent sibling
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor']::text[]);
  get_or_vlabel_ids 
@@ -307,12 +279,10 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor'
                  7
 (2 rows)
 
-
 SELECT * FROM NeoPostGraph.np_vertex_label;
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 1: SELECT * FROM NeoPostGraph.np_vertex_label;
                       ^
-
 ---
 --- get_elabel_ids / get_or_elabel_ids (GiST ltxtquery on np_edge_label_<G>)
 ---
@@ -344,7 +314,6 @@ NOTICE:  Merged elabels 2 and 4 for graph "label_graph"
  
 (1 row)
 
-
 SELECT NeoPostGraph.create_elabel('edge_case_graph', 'test_label_123');
 NOTICE:  elabel "edge_case_graph" has been created
  create_elabel 
@@ -358,7 +327,6 @@ NOTICE:  elabel "edge_case_graph" has been created
 ---------------
  
 (1 row)
-
 
 SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['knows']::text[]);
  get_elabel_ids 
@@ -399,7 +367,6 @@ SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['인간']::text[]);
 ----------------
               3
 (1 row)
-
 
 SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'likes']::text[]);
  get_or_elabel_ids 

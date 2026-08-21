@@ -450,6 +450,22 @@ static void flush_dictionary_cache(void)
     }
 }
 
+void
+invalidate_graph_name_namespace_cache_entry(const char *name, Oid namespace)
+{
+    graph_name_namespace_cache_key key;
+    bool found;
+
+    initialize_caches();
+    if (!graph_name_namespace_cache_hash)
+        return;
+
+    memset(&key, 0, sizeof(key));
+    namestrcpy(&key.name, name);
+    key.namespace = namespace;
+    hash_search(graph_name_namespace_cache_hash, &key, HASH_REMOVE, &found);
+}
+
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, const Oid namespace)
 {
     initialize_caches();
