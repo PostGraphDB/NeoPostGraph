@@ -170,6 +170,15 @@ FROM np_edge_label_31
 WHERE ltree = '_.colleague'::ltree OR ltree ~ '*.colleague.*'::lquery
 ORDER BY id;
 
+SELECT drop_annotation_label('edge_graph', 'friend', 'bestie');
+SELECT id, ltree, annotation_map, is_primary FROM np_edge_label_31 WHERE id = 9;
+
+SELECT drop_annotation_label('edge_graph', 'colleague', 'former');
+SELECT id, ltree, annotation_map, is_primary
+FROM np_edge_label_31
+WHERE ltree = '_.colleague'::ltree OR ltree ~ '*.colleague.*'::lquery
+ORDER BY id;
+
 -- =====================================================================
 -- TEST: drop_elabel (O(1) Metadata-Only Migration)
 -- =====================================================================

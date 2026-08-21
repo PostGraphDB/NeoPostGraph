@@ -403,6 +403,36 @@ ORDER BY id;
   8 | _.colleague.promoted | t             | {former}       | t
 (2 rows)
 
+SELECT drop_annotation_label('edge_graph', 'friend', 'bestie');
+NOTICE:  Annotation label "bestie" dropped from 1 structural label(s) under "friend"
+ drop_annotation_label 
+-----------------------
+ 
+(1 row)
+
+SELECT id, ltree, annotation_map, is_primary FROM np_edge_label_31 WHERE id = 9;
+ id |  ltree   | annotation_map  | is_primary 
+----+----------+-----------------+------------
+  9 | _.friend | {close,distant} | t
+(1 row)
+
+SELECT drop_annotation_label('edge_graph', 'colleague', 'former');
+NOTICE:  Annotation label "former" dropped from 2 structural label(s) under "colleague"
+ drop_annotation_label 
+-----------------------
+ 
+(1 row)
+
+SELECT id, ltree, annotation_map, is_primary
+FROM np_edge_label_31
+WHERE ltree = '_.colleague'::ltree OR ltree ~ '*.colleague.*'::lquery
+ORDER BY id;
+ id |        ltree         | annotation_map | is_primary 
+----+----------------------+----------------+------------
+  4 | _.colleague          | {}             | t
+  8 | _.colleague.promoted | {}             | t
+(2 rows)
+
 -- =====================================================================
 -- TEST: drop_elabel (O(1) Metadata-Only Migration)
 -- =====================================================================

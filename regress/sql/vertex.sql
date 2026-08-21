@@ -489,6 +489,15 @@ ORDER BY id;
 SELECT add_vertex_annotation_label(1::int8, 6, 22, 'ArchivedTag');
 SELECT id, annotations FROM np_vertex_22_6_annotations WHERE id = 1;
 
+-- drop_annotation_label must also rewrite is_primary = false descendants
+SELECT drop_annotation_label('drop_graph', 'entity', 'ArchivedTag');
+SELECT id, ltree, annotation_map, is_primary
+FROM np_vertex_label_22
+ORDER BY id;
+
+-- Re-add so later vertex_out still sees the schema (instance bitset is unchanged)
+SELECT add_annotation_label('drop_graph', 'entity', 'ArchivedTag');
+
 
 -- =====================================================================
 -- SCENARIO B: Drop an intermediate label ('organization')
