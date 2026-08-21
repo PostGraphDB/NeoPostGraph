@@ -173,6 +173,11 @@ RETURNS void
 LANGUAGE c 
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION rename_vlabel(graph_name Name, label text, new_label text, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 CREATE FUNCTION add_annotation_label(graph_name name, structural_label text, new_annotation_label text, namespace text DEFAULT NULL)
 RETURNS void
 LANGUAGE c

@@ -389,3 +389,106 @@ SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'janitor']::
                  2
 (1 row)
 
+---
+--- rename_vlabel: rewrite ltree tokens, leave physical tables
+---
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_16 ORDER BY id;
+ id |           ltree            | is_primary 
+----+----------------------------+------------
+  1 | _                          | t
+  2 | _.person                   | t
+  3 | _.software                 | t
+  4 | _.employee                 | t
+  5 | _.person.employee          | t
+  6 | _.engineer                 | t
+  7 | _.person.employee.engineer | t
+  8 | _.contractor               | t
+  9 | _.person.contractor        | t
+(9 rows)
+
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'employee', 'staff', 'public');
+NOTICE:  vlabel "employee" has been renamed to "staff"
+ rename_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_16 ORDER BY id;
+ id |          ltree          | is_primary 
+----+-------------------------+------------
+  1 | _                       | t
+  2 | _.person                | t
+  3 | _.software              | t
+  4 | _.staff                 | t
+  5 | _.person.staff          | t
+  6 | _.engineer              | t
+  7 | _.person.staff.engineer | t
+  8 | _.contractor            | t
+  9 | _.person.contractor     | t
+(9 rows)
+
+SELECT label_name, label_type FROM neopostgraph.np_label_catalog_16 WHERE label_name IN ('employee', 'staff') ORDER BY label_name;
+ label_name | label_type 
+------------+------------
+ staff      | s
+(1 row)
+
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'staff', 'public');
+NOTICE:  vlabel "staff" is already named "staff"
+ rename_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'person', 'public');
+ERROR:  label "person" already exists
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'missing_label', 'x', 'public');
+ERROR:  vlabel "missing_label" does not exist
+SELECT NeoPostGraph.rename_vlabel('missing_graph', 'staff', 'x', 'public');
+ERROR:  graph "missing_graph" does not exist in the namespace "public"
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'has.dot', 'public');
+ERROR:  labels cannot contain dots
+-- is_primary = false partitions must be rewritten too
+SELECT NeoPostGraph.merge_vlabels('match_test_graph', 2, 3);
+NOTICE:  Merged vlabel "_.user.user_admin" has been created
+ merge_vlabels 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.drop_vlabel('match_test_graph', 'user_admin');
+NOTICE:  Structural label "user_admin" has been dropped. Modified 2 physical partition(s) in O(1) time.
+ drop_vlabel 
+-------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
+ id |     ltree      | is_primary 
+----+----------------+------------
+  1 | _              | t
+  2 | _.user         | t
+  3 | _              | f
+  4 | _.user_profile | t
+  5 | _.users        | t
+  6 | _.user         | f
+(6 rows)
+
+SELECT NeoPostGraph.rename_vlabel('match_test_graph', 'user', 'account', 'public');
+NOTICE:  vlabel "user" has been renamed to "account"
+ rename_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
+ id |     ltree      | is_primary 
+----+----------------+------------
+  1 | _              | t
+  2 | _.account      | t
+  3 | _              | f
+  4 | _.user_profile | t
+  5 | _.users        | t
+  6 | _.account      | f
+(6 rows)
+

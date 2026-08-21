@@ -68,6 +68,7 @@ const label_cache_data *search_edge_label_graph_id_label_id_cache(int graph_id, 
 void np_cache_xact_callback(XactEvent event, void *arg);
 void flush_edge_label_cache(void);
 void invalidate_graph_name_namespace_cache_entry(const char *name, Oid namespace);
+void invalidate_vertex_label_graph_id_label_id_cache_entry(int graph_id, int label_id);
 const vertex_dictionary_cache_data *search_vertex_dictionary_cache(int graph_id, int label_id, int dictionary_id);
 
 

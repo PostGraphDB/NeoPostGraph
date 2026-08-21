@@ -466,6 +466,22 @@ invalidate_graph_name_namespace_cache_entry(const char *name, Oid namespace)
     hash_search(graph_name_namespace_cache_hash, &key, HASH_REMOVE, &found);
 }
 
+void
+invalidate_vertex_label_graph_id_label_id_cache_entry(int graph_id, int label_id)
+{
+    graph_id_label_id_cache_key key;
+    bool found;
+
+    initialize_caches();
+    if (!vertex_label_graph_id_id_cache_hash)
+        return;
+
+    memset(&key, 0, sizeof(key));
+    key.graph_id = graph_id;
+    key.label_id = label_id;
+    hash_search(vertex_label_graph_id_id_cache_hash, &key, HASH_REMOVE, &found);
+}
+
 const graph_cache_data *search_graph_name_namespace_cache(const char *name, const Oid namespace)
 {
     initialize_caches();

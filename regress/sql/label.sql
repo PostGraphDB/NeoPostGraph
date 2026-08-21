@@ -145,3 +145,26 @@ SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['인간']::text[]);
 SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'likes']::text[]);
 SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['reports_to', 'likes']::text[]);
 SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'janitor']::text[]);
+
+---
+--- rename_vlabel: rewrite ltree tokens, leave physical tables
+---
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_16 ORDER BY id;
+
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'employee', 'staff', 'public');
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_16 ORDER BY id;
+SELECT label_name, label_type FROM neopostgraph.np_label_catalog_16 WHERE label_name IN ('employee', 'staff') ORDER BY label_name;
+
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'staff', 'public');
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'person', 'public');
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'missing_label', 'x', 'public');
+SELECT NeoPostGraph.rename_vlabel('missing_graph', 'staff', 'x', 'public');
+SELECT NeoPostGraph.rename_vlabel('label_graph', 'staff', 'has.dot', 'public');
+
+-- is_primary = false partitions must be rewritten too
+SELECT NeoPostGraph.merge_vlabels('match_test_graph', 2, 3);
+SELECT NeoPostGraph.drop_vlabel('match_test_graph', 'user_admin');
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
+
+SELECT NeoPostGraph.rename_vlabel('match_test_graph', 'user', 'account', 'public');
+SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;

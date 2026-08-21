@@ -1269,6 +1269,212 @@ drop_vlabel(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
+PG_FUNCTION_INFO_V1(rename_vlabel);
+Datum
+rename_vlabel(PG_FUNCTION_ARGS)
+{
+    char *graph_name;
+    char *old_label;
+    char *new_label;
+    Oid nsp;
+    const graph_cache_data *graph;
+    Relation catalog_rel;
+    TableScanDesc scan;
+    TupleDesc tupdesc;
+    HeapTuple tuple;
+    char *cat_name;
+    Relation global_cat_rel;
+    ScanKeyData skey[1];
+    SysScanDesc cat_scan;
+    HeapTuple cat_tuple;
+    Datum old_name_datum;
+    Datum new_name_datum;
+
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("label must not be NULL")));
+    if (PG_ARGISNULL(2))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("new label must not be NULL")));
+
+    graph_name = NameStr(*PG_GETARG_NAME(0));
+    old_label = text_to_cstring(PG_GETARG_TEXT_PP(1));
+    new_label = text_to_cstring(PG_GETARG_TEXT_PP(2));
+
+    if (old_label[0] == '\0' || new_label[0] == '\0')
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("label must not be empty")));
+    if (strchr(old_label, '.') != NULL || strchr(new_label, '.') != NULL)
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("labels cannot contain dots")));
+    if (strcmp(old_label, "_") == 0 || strcmp(new_label, "_") == 0)
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("cannot rename the root label \"_\"")));
+
+    if (PG_ARGISNULL(3))
+    {
+        List *search_path = fetch_search_path(false);
+        if (list_length(search_path) < 1)
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("rename_vlabel requires a search path when namespace is not specified")));
+        nsp = linitial_oid(search_path);
+    }
+    else
+    {
+        char *nsp_str = text_to_cstring(PG_GETARG_TEXT_PP(3));
+        nsp = get_namespace_oid(nsp_str, true);
+        if (!OidIsValid(nsp))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("namespace \"%s\" does not exist", nsp_str)));
+    }
+
+    graph = search_graph_name_namespace_cache(graph_name, nsp);
+    if (!graph)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" does not exist in the namespace \"%s\"",
+                               graph_name, get_namespace_name(nsp))));
+
+    if (strcmp(old_label, new_label) == 0)
+    {
+        ereport(NOTICE, (errmsg("vlabel \"%s\" is already named \"%s\"",
+                                old_label, new_label)));
+        PG_RETURN_VOID();
+    }
+
+    cat_name = psprintf("np_label_catalog_%d", (int) graph->id);
+    global_cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
+
+    new_name_datum = CStringGetTextDatum(new_label);
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, new_name_datum);
+    cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 1, skey);
+    if (HeapTupleIsValid(systable_getnext(cat_scan)))
+    {
+        systable_endscan(cat_scan);
+        table_close(global_cat_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_DUPLICATE_OBJECT),
+                        errmsg("label \"%s\" already exists", new_label)));
+    }
+    systable_endscan(cat_scan);
+
+    old_name_datum = CStringGetTextDatum(old_label);
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, old_name_datum);
+    cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 1, skey);
+    cat_tuple = systable_getnext(cat_scan);
+    if (!HeapTupleIsValid(cat_tuple))
+    {
+        systable_endscan(cat_scan);
+        table_close(global_cat_rel, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                        errmsg("vlabel \"%s\" does not exist", old_label)));
+    }
+    {
+        bool isnull;
+        char actual_type = DatumGetChar(heap_getattr(cat_tuple, 2, RelationGetDescr(global_cat_rel), &isnull));
+
+        if (isnull || actual_type != 's')
+        {
+            systable_endscan(cat_scan);
+            table_close(global_cat_rel, RowExclusiveLock);
+            ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                            errmsg("vlabel \"%s\" does not exist", old_label)));
+        }
+    }
+
+    catalog_rel = table_open(graph->vertex_labels, RowExclusiveLock);
+    scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
+    tupdesc = RelationGetDescr(catalog_rel);
+
+    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    {
+        bool isnull;
+        Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
+        char *path;
+        char *path_copy;
+        char *tokens[256];
+        int num_tokens = 0;
+        char *tok;
+        bool modified = false;
+        StringInfoData new_path;
+        int32 label_id;
+
+        if (isnull)
+            continue;
+
+        path = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
+        path_copy = pstrdup(path);
+        tok = strtok(path_copy, ".");
+        while (tok != NULL && num_tokens < 256)
+        {
+            tokens[num_tokens++] = tok;
+            tok = strtok(NULL, ".");
+        }
+
+        initStringInfo(&new_path);
+        for (int i = 0; i < num_tokens; i++)
+        {
+            const char *piece = tokens[i];
+
+            if (strcmp(piece, old_label) == 0)
+            {
+                piece = new_label;
+                modified = true;
+            }
+            if (new_path.len > 0)
+                appendStringInfoChar(&new_path, '.');
+            appendStringInfoString(&new_path, piece);
+        }
+
+        if (modified)
+        {
+            Datum values[10] = {0};
+            bool nulls[10] = {0};
+            bool replaces[10] = {0};
+            HeapTuple new_tuple;
+
+            values[1] = DirectFunctionCall1(ltree_in, CStringGetDatum(new_path.data));
+            replaces[1] = true;
+            new_tuple = heap_modify_tuple(tuple, tupdesc, values, nulls, replaces);
+            np_catalog_update(catalog_rel, tuple, new_tuple);
+            heap_freetuple(new_tuple);
+
+            label_id = DatumGetInt32(heap_getattr(tuple, 1, tupdesc, &isnull));
+            if (!isnull)
+                invalidate_vertex_label_graph_id_label_id_cache_entry((int) graph->id, label_id);
+        }
+
+        pfree(new_path.data);
+        pfree(path_copy);
+        pfree(path);
+    }
+
+    table_endscan(scan);
+    table_close(catalog_rel, RowExclusiveLock);
+
+    {
+        Datum values[2] = {0};
+        bool nulls[2] = {0};
+        bool replaces[2] = {0};
+        HeapTuple new_cat;
+
+        values[0] = new_name_datum;
+        replaces[0] = true;
+        new_cat = heap_modify_tuple(cat_tuple, RelationGetDescr(global_cat_rel), values, nulls, replaces);
+        np_catalog_update(global_cat_rel, cat_tuple, new_cat);
+        heap_freetuple(new_cat);
+    }
+
+    systable_endscan(cat_scan);
+    table_close(global_cat_rel, RowExclusiveLock);
+    CommandCounterIncrement();
+
+    ereport(NOTICE, (errmsg("vlabel \"%s\" has been renamed to \"%s\"",
+                            old_label, new_label)));
+    PG_RETURN_VOID();
+}
+
 /*
  * drop_elabel — O(1) metadata-only drop of a structural edge-label token.
  *
