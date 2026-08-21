@@ -350,3 +350,232 @@ SELECT * FROM np_edge_31_9 WHERE id = 2;
   2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend", "properties": {"met": "college"}}
 (1 row)
 
+-- =====================================================================
+-- TEST: drop_elabel (O(1) Metadata-Only Migration)
+-- =====================================================================
+SELECT create_graph('drop_elabel_graph', 'public');
+NOTICE:  graph "drop_elabel_graph" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+-- 1. Setup Label Hierarchy: _.knows.works_with.reports_to
+SELECT create_elabel('drop_elabel_graph', 'knows');
+NOTICE:  elabel "drop_elabel_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT create_elabel('drop_elabel_graph', 'works_with');
+NOTICE:  elabel "drop_elabel_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT create_elabel('drop_elabel_graph', 'reports_to');
+NOTICE:  elabel "drop_elabel_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+-- Assuming IDs: root=1, knows=2, works_with=3, reports_to=4
+SELECT merge_elabels('drop_elabel_graph', 2, 3); -- Creates _.knows.works_with (ID=5)
+NOTICE:  Merged elabels 2 and 3 for graph "drop_elabel_graph"
+ merge_elabels 
+---------------
+ 
+(1 row)
+
+SELECT merge_elabels('drop_elabel_graph', 5, 4); -- Creates _.knows.works_with.reports_to (ID=6)
+NOTICE:  Merged elabels 5 and 4 for graph "drop_elabel_graph"
+ merge_elabels 
+---------------
+ 
+(1 row)
+
+-- Vertices so we can store edges in the partitions
+SELECT create_vlabel('drop_elabel_graph', 'node');
+NOTICE:  vlabel "node" has been created
+ create_vlabel 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "A"}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "B"}'::gtype));
+ insert_vertex 
+---------------
+ 
+(1 row)
+
+-- Insert an edge into each structural partition that will be remapped
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_2')::int8, 32, 2, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "knows"}'::gtype)
+);
+ insert_edge 
+-------------
+ 
+(1 row)
+
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_5')::int8, 32, 5, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "works_with"}'::gtype)
+);
+ insert_edge 
+-------------
+ 
+(1 row)
+
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_6')::int8, 32, 6, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "reports_to"}'::gtype)
+);
+ insert_edge 
+-------------
+ 
+(1 row)
+
+-- Verify initial catalog state
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+ id |          ltree          |     tbl      | is_primary 
+----+-------------------------+--------------+------------
+  1 | _                       | np_edge_32_1 | t
+  2 | _.knows                 | np_edge_32_2 | t
+  3 | _.works_with            | np_edge_32_3 | t
+  4 | _.reports_to            | np_edge_32_4 | t
+  5 | _.works_with.works_with | np_edge_32_5 | t
+  6 | _.reports_to.reports_to | np_edge_32_6 | t
+(6 rows)
+
+-- =====================================================================
+-- SCENARIO A: Drop a leaf label ('reports_to')
+-- Expected: reports_to edge STAYS in Table 6, but Table 6 is logically remapped
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'reports_to');
+NOTICE:  Structural edge label "reports_to" has been dropped. Modified 2 physical partition(s) in O(1) time.
+ drop_elabel 
+-------------
+ 
+(1 row)
+
+-- Verify catalog:
+-- ID 4 (_.reports_to) becomes _ with is_primary = f
+-- ID 6 (_.knows.works_with.reports_to) becomes _.knows.works_with with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+ id |          ltree          |     tbl      | is_primary 
+----+-------------------------+--------------+------------
+  1 | _                       | np_edge_32_1 | t
+  2 | _.knows                 | np_edge_32_2 | t
+  3 | _.works_with            | np_edge_32_3 | t
+  4 | _                       | np_edge_32_4 | f
+  5 | _.works_with.works_with | np_edge_32_5 | t
+  6 | _.reports_to            | np_edge_32_6 | t
+(6 rows)
+
+-- Verify O(1) Storage: payload must STILL live in its original physical table
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;
+ id |                                                        edge                                                         
+----+---------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "reports_to", "properties": {"kind": "reports_to"}}
+(1 row)
+
+-- =====================================================================
+-- SCENARIO B: Drop an intermediate label ('works_with')
+-- Expected: both works_with and reports_to partitions logically shift to _.knows
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'works_with');
+NOTICE:  Structural edge label "works_with" has been dropped. Modified 2 physical partition(s) in O(1) time.
+ drop_elabel 
+-------------
+ 
+(1 row)
+
+-- Verify catalog:
+-- ID 3 (_.works_with) becomes _ with is_primary = f
+-- ID 5 (_.knows.works_with) becomes _.knows with is_primary = f
+-- ID 6 (was _.knows.works_with) becomes _.knows with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+ id |    ltree     |     tbl      | is_primary 
+----+--------------+--------------+------------
+  1 | _            | np_edge_32_1 | t
+  2 | _.knows      | np_edge_32_2 | t
+  3 | _            | np_edge_32_3 | f
+  4 | _            | np_edge_32_4 | f
+  5 | _.works_with | np_edge_32_5 | t
+  6 | _.reports_to | np_edge_32_6 | t
+(6 rows)
+
+SELECT id, edge FROM np_edge_32_5 ORDER BY id;
+ id |                                                        edge                                                         
+----+---------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "works_with", "properties": {"kind": "works_with"}}
+(1 row)
+
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;
+ id |                                                        edge                                                         
+----+---------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "reports_to", "properties": {"kind": "reports_to"}}
+(1 row)
+
+-- =====================================================================
+-- SCENARIO C: Drop the base label ('knows')
+-- Expected: all remapped partitions fallback to root '_'
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'knows');
+NOTICE:  Structural edge label "knows" has been dropped. Modified 1 physical partition(s) in O(1) time.
+ drop_elabel 
+-------------
+ 
+(1 row)
+
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+ id |    ltree     |     tbl      | is_primary 
+----+--------------+--------------+------------
+  1 | _            | np_edge_32_1 | t
+  2 | _            | np_edge_32_2 | f
+  3 | _            | np_edge_32_3 | f
+  4 | _            | np_edge_32_4 | f
+  5 | _.works_with | np_edge_32_5 | t
+  6 | _.reports_to | np_edge_32_6 | t
+(6 rows)
+
+SELECT id, edge FROM np_edge_32_2 ORDER BY id;
+ id |                                                 edge                                                  
+----+-------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {"kind": "knows"}}
+(1 row)
+
+SELECT id, edge FROM np_edge_32_5 ORDER BY id;
+ id |                                                        edge                                                         
+----+---------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "works_with", "properties": {"kind": "works_with"}}
+(1 row)
+
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;
+ id |                                                        edge                                                         
+----+---------------------------------------------------------------------------------------------------------------------
+  1 | {"id": 1, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "reports_to", "properties": {"kind": "reports_to"}}
+(1 row)
+

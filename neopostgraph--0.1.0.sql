@@ -298,6 +298,11 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION drop_elabel(graph_name Name, label text)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 --
 -- DML Commands
 --

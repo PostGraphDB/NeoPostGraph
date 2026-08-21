@@ -151,3 +151,93 @@ SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
 
 -- 5b. Prove String State: edge_out should revert to base label "friend"
 SELECT * FROM np_edge_31_9 WHERE id = 2;
+
+-- =====================================================================
+-- TEST: drop_elabel (O(1) Metadata-Only Migration)
+-- =====================================================================
+
+SELECT create_graph('drop_elabel_graph', 'public');
+
+-- 1. Setup Label Hierarchy: _.knows.works_with.reports_to
+SELECT create_elabel('drop_elabel_graph', 'knows');
+SELECT create_elabel('drop_elabel_graph', 'works_with');
+SELECT create_elabel('drop_elabel_graph', 'reports_to');
+
+-- Assuming IDs: root=1, knows=2, works_with=3, reports_to=4
+SELECT merge_elabels('drop_elabel_graph', 2, 3); -- Creates _.knows.works_with (ID=5)
+SELECT merge_elabels('drop_elabel_graph', 5, 4); -- Creates _.knows.works_with.reports_to (ID=6)
+
+-- Vertices so we can store edges in the partitions
+SELECT create_vlabel('drop_elabel_graph', 'node');
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "A"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "B"}'::gtype));
+
+-- Insert an edge into each structural partition that will be remapped
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_2')::int8, 32, 2, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "knows"}'::gtype)
+);
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_5')::int8, 32, 5, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "works_with"}'::gtype)
+);
+SELECT insert_edge(
+    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+    edge_build(nextval('np_edge_id_seq_32_6')::int8, 32, 6, 0::smallint,
+        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
+        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
+        '{"kind": "reports_to"}'::gtype)
+);
+
+-- Verify initial catalog state
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+
+-- =====================================================================
+-- SCENARIO A: Drop a leaf label ('reports_to')
+-- Expected: reports_to edge STAYS in Table 6, but Table 6 is logically remapped
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'reports_to');
+
+-- Verify catalog:
+-- ID 4 (_.reports_to) becomes _ with is_primary = f
+-- ID 6 (_.knows.works_with.reports_to) becomes _.knows.works_with with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+
+-- Verify O(1) Storage: payload must STILL live in its original physical table
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;
+
+-- =====================================================================
+-- SCENARIO B: Drop an intermediate label ('works_with')
+-- Expected: both works_with and reports_to partitions logically shift to _.knows
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'works_with');
+
+-- Verify catalog:
+-- ID 3 (_.works_with) becomes _ with is_primary = f
+-- ID 5 (_.knows.works_with) becomes _.knows with is_primary = f
+-- ID 6 (was _.knows.works_with) becomes _.knows with is_primary = f
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+
+SELECT id, edge FROM np_edge_32_5 ORDER BY id;
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;
+
+-- =====================================================================
+-- SCENARIO C: Drop the base label ('knows')
+-- Expected: all remapped partitions fallback to root '_'
+-- =====================================================================
+SELECT drop_elabel('drop_elabel_graph', 'knows');
+
+SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;
+
+SELECT id, edge FROM np_edge_32_2 ORDER BY id;
+SELECT id, edge FROM np_edge_32_5 ORDER BY id;
+SELECT id, edge FROM np_edge_32_6 ORDER BY id;

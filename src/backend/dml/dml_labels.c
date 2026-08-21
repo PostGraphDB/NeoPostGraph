@@ -1269,6 +1269,140 @@ drop_vlabel(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
+/*
+ * drop_elabel — O(1) metadata-only drop of a structural edge-label token.
+ *
+ * Mirrors drop_vlabel: rewrite every ltree in np_edge_label_<G> that contains
+ * the token, demote a leaf partition (is_primary = false), and leave entity
+ * rows in their original physical tables.
+ */
+PG_FUNCTION_INFO_V1(drop_elabel);
+Datum
+drop_elabel(PG_FUNCTION_ARGS)
+{
+    Name graph_name = PG_GETARG_NAME(0);
+    char *graph_name_str = NameStr(*graph_name);
+
+    text *label_text = PG_GETARG_TEXT_PP(1);
+    char *label_str = text_to_cstring(label_text);
+
+    Oid namespace = linitial_oid(fetch_search_path(false));
+    const graph_cache_data *graph = search_graph_name_namespace_cache(graph_name_str, namespace);
+    if (!graph)
+        ereport(ERROR, (errmsg("NeoPostGraph: Graph '%s' not found", graph_name_str)));
+
+    int32 graph_id = graph->id;
+
+    /* 1. Open the Edge Label Catalog for rewriting */
+    Relation catalog_rel = table_open(graph->edge_labels, RowExclusiveLock);
+    TableScanDesc scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
+    TupleDesc tupdesc = RelationGetDescr(catalog_rel);
+    HeapTuple tuple;
+
+    int dropped_count = 0;
+
+    /* 2. Sequentially scan the catalog (O(1) relative to entity scale) */
+    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL) {
+        bool isnull;
+        Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
+        char *path = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
+
+        /* Tokenize the ltree path by '.' */
+        char *path_copy = pstrdup(path);
+        char *tokens[256];
+        int num_tokens = 0;
+        char *tok = strtok(path_copy, ".");
+        while (tok != NULL && num_tokens < 256) {
+            tokens[num_tokens++] = tok;
+            tok = strtok(NULL, ".");
+        }
+
+        bool modified = false;
+        bool is_exact = false;
+
+        StringInfoData new_path;
+        initStringInfo(&new_path);
+
+        /* 3. Rebuild the ltree path, omitting the dropped label */
+        for (int i = 0; i < num_tokens; i++) {
+            if (strcmp(tokens[i], label_str) == 0 && !modified) {
+                modified = true;
+                /* If the dropped label is the very last token, it is a leaf drop */
+                if (i == num_tokens - 1) {
+                    is_exact = true;
+                }
+            } else {
+                if (new_path.len > 0) appendStringInfoChar(&new_path, '.');
+                appendStringInfoString(&new_path, tokens[i]);
+            }
+        }
+
+        /* If the label dropped was the only label (e.g. _.knows), fallback to root _ */
+        if (new_path.len == 0) {
+            appendStringInfoString(&new_path, "_");
+        }
+
+        /* 4. If the path contained the label, update the catalog tuple */
+        if (modified) {
+            /* np_edge_label_<G> has 7 columns; is_primary is attnum 7 (index 6) */
+            Datum values[7] = {0};
+            bool nulls[7] = {0};
+            bool replaces[7] = {0};
+
+            /* Update Column 2 (Index 1): ltree */
+            values[1] = DirectFunctionCall1(ltree_in, CStringGetDatum(new_path.data));
+            replaces[1] = true;
+
+            /*
+             * Update Column 7 (Index 6): is_primary
+             * If it was a leaf drop, this table is no longer the primary storage
+             * for its logical path. It becomes a secondary/archived table.
+             */
+            if (is_exact) {
+                values[6] = BoolGetDatum(false);
+                replaces[6] = true;
+            }
+
+            HeapTuple new_tuple = heap_modify_tuple(tuple, tupdesc, values, nulls, replaces);
+
+            np_catalog_update(catalog_rel, tuple, new_tuple);
+
+            heap_freetuple(new_tuple);
+            dropped_count++;
+        }
+
+        pfree(new_path.data);
+        pfree(path_copy);
+        pfree(path);
+    }
+
+    table_endscan(scan);
+    table_close(catalog_rel, RowExclusiveLock);
+
+    /* 5. Remove the structural label from the Global Label Catalog, if present */
+    char *cat_name = psprintf("np_label_catalog_%d", graph_id);
+    Relation global_cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
+
+    NameData name_val;
+    namestrcpy(&name_val, label_str);
+    ScanKeyData skey[2];
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_val));
+    ScanKeyInit(&skey[1], 2, BTEqualStrategyNumber, F_CHAREQ, CharGetDatum('s'));
+
+    SysScanDesc global_cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 2, skey);
+    HeapTuple cat_tuple;
+    while (HeapTupleIsValid(cat_tuple = systable_getnext(global_cat_scan))) {
+        CatalogTupleDelete(global_cat_rel, &cat_tuple->t_self);
+    }
+    systable_endscan(global_cat_scan);
+    table_close(global_cat_rel, RowExclusiveLock);
+
+    ereport(NOTICE, (errmsg("Structural edge label \"%s\" has been dropped. Modified %d physical partition(s) in O(1) time.", label_str, dropped_count)));
+
+    pfree(label_str);
+    PG_RETURN_VOID();
+}
+
 
 PG_FUNCTION_INFO_V1(set_edge_label);
 Datum

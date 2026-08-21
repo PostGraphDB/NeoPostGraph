@@ -2927,21 +2927,24 @@ void np_catalog_update(Relation rel, HeapTuple old_tup, HeapTuple new_tup)
 
             FormIndexDatum(indexInfo, slot, NULL, idx_values, idx_nulls);
 
-            /* 
+            /*
              * Check if the new tuple still satisfies the partial index predicate.
-             * For our is_primary index, we check if is_primary is true.
+             * Vertex catalog: is_primary is attnum 10.
+             * Edge catalog:   is_primary is attnum 7.
              */
             bool satisfy_predicate = true;
             if (indexInfo->ii_Predicate != NIL) {
-                /* 
-                 * We can do a quick check: if the 10th column (is_primary) is false,
-                 * skip index insertion for this specific partial GiST index.
-                 */
                 bool is_null;
-                Datum is_primary_datum = heap_getattr(new_tup, 10, RelationGetDescr(rel), &is_null);
-                if (!is_null && !DatumGetBool(is_primary_datum)) {
+                TupleDesc desc = RelationGetDescr(rel);
+                Datum is_primary_datum;
+
+                if (desc->natts >= 10)
+                    is_primary_datum = heap_getattr(new_tup, 10, desc, &is_null);
+                else
+                    is_primary_datum = heap_getattr(new_tup, 7, desc, &is_null);
+
+                if (!is_null && !DatumGetBool(is_primary_datum))
                     satisfy_predicate = false;
-                }
             }
 
             if (satisfy_predicate) {
