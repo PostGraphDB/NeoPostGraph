@@ -303,6 +303,16 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION get_elabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
+RETURNS SETOF int
+AS 'MODULE_PATHNAME', 'get_elabel_ids_by_path'
+LANGUAGE C STABLE;
+
+CREATE FUNCTION get_or_elabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
+RETURNS SETOF int
+AS 'MODULE_PATHNAME', 'get_or_elabel_ids_by_path'
+LANGUAGE C STABLE;
+
 --
 -- DML Commands
 --

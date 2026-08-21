@@ -312,3 +312,113 @@ SELECT * FROM NeoPostGraph.np_vertex_label;
 ERROR:  relation "neopostgraph.np_vertex_label" does not exist
 LINE 1: SELECT * FROM NeoPostGraph.np_vertex_label;
                       ^
+
+---
+--- get_elabel_ids / get_or_elabel_ids (GiST ltxtquery on np_edge_label_<G>)
+---
+SELECT NeoPostGraph.create_elabel('label_graph', 'knows');
+NOTICE:  elabel "label_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_elabel('label_graph', 'likes');
+NOTICE:  elabel "label_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_elabel('label_graph', 'reports_to');
+NOTICE:  elabel "label_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.merge_elabels('label_graph', 2, 4);
+NOTICE:  Merged elabels 2 and 4 for graph "label_graph"
+ merge_elabels 
+---------------
+ 
+(1 row)
+
+
+SELECT NeoPostGraph.create_elabel('edge_case_graph', 'test_label_123');
+NOTICE:  elabel "edge_case_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.create_elabel('edge_case_graph', '인간');
+NOTICE:  elabel "edge_case_graph" has been created
+ create_elabel 
+---------------
+ 
+(1 row)
+
+
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['knows']::text[]);
+ get_elabel_ids 
+----------------
+              2
+(1 row)
+
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['knows', 'reports_to']::text[]);
+ get_elabel_ids 
+----------------
+(0 rows)
+
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['likes']::text[]);
+ get_elabel_ids 
+----------------
+              3
+(1 row)
+
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['manager']::text[]);
+ get_elabel_ids 
+----------------
+(0 rows)
+
+SELECT NeoPostGraph.get_elabel_ids('missing_graph', ARRAY['knows']::text[]);
+ERROR:  graph "missing_graph" does not exist in namespace "public"
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY[]::text[]);
+ERROR:  label array must not be empty
+SELECT NeoPostGraph.get_elabel_ids('label_graph', NULL);
+ERROR:  label array must not be NULL
+SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['test_label_123']::text[]);
+ get_elabel_ids 
+----------------
+              2
+(1 row)
+
+SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['인간']::text[]);
+ get_elabel_ids 
+----------------
+              3
+(1 row)
+
+
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'likes']::text[]);
+ get_or_elabel_ids 
+-------------------
+                 2
+                 3
+(2 rows)
+
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['reports_to', 'likes']::text[]);
+ get_or_elabel_ids 
+-------------------
+                 3
+                 4
+                 5
+(3 rows)
+
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'janitor']::text[]);
+ get_or_elabel_ids 
+-------------------
+                 2
+(1 row)
+

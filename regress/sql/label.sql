@@ -120,3 +120,28 @@ SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'contract
 SELECT NeoPostGraph.get_or_vlabel_ids('label_graph', ARRAY['engineer', 'janitor']::text[]);
 
 SELECT * FROM NeoPostGraph.np_vertex_label;
+
+---
+--- get_elabel_ids / get_or_elabel_ids (GiST ltxtquery on np_edge_label_<G>)
+---
+SELECT NeoPostGraph.create_elabel('label_graph', 'knows');
+SELECT NeoPostGraph.create_elabel('label_graph', 'likes');
+SELECT NeoPostGraph.create_elabel('label_graph', 'reports_to');
+SELECT NeoPostGraph.merge_elabels('label_graph', 2, 4);
+
+SELECT NeoPostGraph.create_elabel('edge_case_graph', 'test_label_123');
+SELECT NeoPostGraph.create_elabel('edge_case_graph', '인간');
+
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['knows']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['knows', 'reports_to']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['likes']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY['manager']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('missing_graph', ARRAY['knows']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('label_graph', ARRAY[]::text[]);
+SELECT NeoPostGraph.get_elabel_ids('label_graph', NULL);
+SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['test_label_123']::text[]);
+SELECT NeoPostGraph.get_elabel_ids('edge_case_graph', ARRAY['인간']::text[]);
+
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'likes']::text[]);
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['reports_to', 'likes']::text[]);
+SELECT NeoPostGraph.get_or_elabel_ids('label_graph', ARRAY['knows', 'janitor']::text[]);

@@ -935,6 +935,168 @@ text_array_to_lxtquery_or(ArrayType *label_array)
     return result;
 }
 
+PG_FUNCTION_INFO_V1(get_elabel_ids_by_path);
+Datum
+get_elabel_ids_by_path(PG_FUNCTION_ARGS)
+{
+    FuncCallContext *funcctx;
+
+    if (SRF_IS_FIRSTCALL())
+    {
+        graph_cache_data *cache_entry;
+
+        funcctx = SRF_FIRSTCALL_INIT();
+        MemoryContext oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        Oid namespace;
+        if (PG_ARGISNULL(2))
+        {
+            List *search_path = fetch_search_path(false);
+            if (list_length(search_path) < 1)
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                                errmsg("get_elabel_ids requires a search path when namespace is not specified")));
+            namespace = linitial_oid(search_path);
+        }
+        else
+        {
+            char *nsp_str = TextDatumGetCString(PG_GETARG_DATUM(2));
+            namespace = get_namespace_oid(nsp_str, true);
+            if (!OidIsValid(namespace))
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                                errmsg("namespace \"%s\" does not exist", nsp_str)));
+        }
+
+        if (PG_ARGISNULL(0))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
+        char *graph_name = NameStr(*PG_GETARG_NAME(0));
+
+        cache_entry = search_graph_name_namespace_cache(graph_name, namespace);
+        if (!cache_entry)
+            ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                            errmsg("graph \"%s\" does not exist in namespace \"%s\"",
+                            graph_name, get_namespace_name(namespace))));
+
+        if (PG_ARGISNULL(1))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label array must not be NULL")));
+
+        Relation rel = table_open(np_relation_id(psprintf("np_edge_label_%d", cache_entry->id), "table"), AccessShareLock);
+
+        ScanKeyData skey[1];
+        ScanKeyInit(&skey[0], 2, 14,
+            DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
+            text_array_to_lxtquery(PG_GETARG_ARRAYTYPE_P(1))
+        );
+
+        SysScanDesc scan = systable_beginscan(rel, np_relation_id(psprintf("np_edge_label_%d_gist_idx", cache_entry->id), "index"), true, NULL, 1, skey);
+
+        GetVLabelContext *fctx = palloc(sizeof(GetVLabelContext));
+        fctx->scan = scan;
+        fctx->rel = rel;
+        funcctx->user_fctx = fctx;
+
+        MemoryContextSwitchTo(oldcontext);
+    }
+
+    funcctx = SRF_PERCALL_SETUP();
+    GetVLabelContext *fctx = (GetVLabelContext *) funcctx->user_fctx;
+    SysScanDesc scan = fctx->scan;
+    HeapTuple tuple;
+
+    if ((tuple = systable_getnext(scan)) != NULL)
+    {
+        bool isnull;
+        Datum id_val = heap_getattr(tuple, 1, RelationGetDescr(fctx->rel), &isnull);
+        SRF_RETURN_NEXT(funcctx, id_val);
+    }
+
+    systable_endscan(scan);
+    table_close(fctx->rel, AccessShareLock);
+    SRF_RETURN_DONE(funcctx);
+}
+
+PG_FUNCTION_INFO_V1(get_or_elabel_ids_by_path);
+Datum
+get_or_elabel_ids_by_path(PG_FUNCTION_ARGS)
+{
+    FuncCallContext *funcctx;
+
+    if (SRF_IS_FIRSTCALL())
+    {
+        graph_cache_data *cache_entry;
+
+        funcctx = SRF_FIRSTCALL_INIT();
+        MemoryContext oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        Oid namespace;
+        if (PG_ARGISNULL(2))
+        {
+            List *search_path = fetch_search_path(false);
+            if (list_length(search_path) < 1)
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                                errmsg("get_elabel_ids requires a search path when namespace is not specified")));
+            namespace = linitial_oid(search_path);
+        }
+        else
+        {
+            char *nsp_str = TextDatumGetCString(PG_GETARG_DATUM(2));
+            namespace = get_namespace_oid(nsp_str, true);
+            if (!OidIsValid(namespace))
+                ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                                errmsg("namespace \"%s\" does not exist", nsp_str)));
+        }
+
+        if (PG_ARGISNULL(0))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("graph name must not be NULL")));
+        char *graph_name = NameStr(*PG_GETARG_NAME(0));
+
+        cache_entry = search_graph_name_namespace_cache(graph_name, namespace);
+        if (!cache_entry)
+        {
+            ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                            errmsg("graph \"%s\" does not exist in namespace \"%s\"",
+                            graph_name, get_namespace_name(namespace))));
+        }
+
+        if (PG_ARGISNULL(1))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE), errmsg("label array must not be NULL")));
+
+        Relation rel = table_open(np_relation_id(psprintf("np_edge_label_%d", cache_entry->id), "table"), AccessShareLock);
+
+        ScanKeyData skey[1];
+        ScanKeyInit(&skey[0], 2, 14,
+            DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum("public.ltxtq_exec(public.ltree, public.ltxtquery)"))),
+            text_array_to_lxtquery_or(PG_GETARG_ARRAYTYPE_P(1))
+        );
+
+        SysScanDesc scan = systable_beginscan(rel, np_relation_id(psprintf("np_edge_label_%d_gist_idx", cache_entry->id), "index"), true, NULL, 1, skey);
+
+        GetVLabelContext *fctx = palloc(sizeof(GetVLabelContext));
+        fctx->scan = scan;
+        fctx->rel = rel;
+        funcctx->user_fctx = fctx;
+
+        MemoryContextSwitchTo(oldcontext);
+    }
+
+    funcctx = SRF_PERCALL_SETUP();
+    GetVLabelContext *fctx = (GetVLabelContext *) funcctx->user_fctx;
+    SysScanDesc scan = fctx->scan;
+    HeapTuple tuple;
+
+    if ((tuple = systable_getnext(scan)) != NULL)
+    {
+        bool isnull;
+        Datum id_val = heap_getattr(tuple, 1, RelationGetDescr(fctx->rel), &isnull);
+        SRF_RETURN_NEXT(funcctx, id_val);
+    }
+    else
+    {
+        systable_endscan(scan);
+        table_close(fctx->rel, AccessShareLock);
+        SRF_RETURN_DONE(funcctx);
+    }
+}
+
 
 
 Oid
