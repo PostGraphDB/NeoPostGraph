@@ -28,13 +28,13 @@
  * Inserts a vertex payload into the heap, processes its annotations, 
  * and writes the routing record to the structural phys_map.
  */
-void np_internal_insert_vertex(vertex *v, ArrayType *input_annots, ItemPointerData *forwarded_a_itemptr);
+void np_internal_insert_vertex(vertex *v, gtype *props, ArrayType *input_annots, ItemPointerData *forwarded_a_itemptr);
 
 /*
  * Inserts an edge payload into the heap, updates the edge phys_map,
  * and handles all doubly-linked adjacency list mutations for both endpoints.
  */
-void np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e);
+void np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e, gtype *props);
 
 ItemPointerData get_current_head_tid(Relation pmap_rel, uint64 vertex_id, Oid *head_tbl);
 

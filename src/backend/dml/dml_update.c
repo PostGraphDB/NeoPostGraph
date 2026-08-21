@@ -44,6 +44,7 @@
 #include "catalog/np_label.h"
 #include "utils/adj_list.h"
 #include "access/np_phys_map.h"
+#include "access/np_entity_store.h"
 #include "utils/edge.h"
 
 #include "dml/dml_insert.h"
@@ -121,7 +122,7 @@ update_edge(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
     }
 
-    edge *old_e = (edge *) old_hdr_check->serialized_entity;
+    edge *old_e = (edge *) np_entity_get_meta(old_hdr_check);
     
     // TODO: Dictionary Compression
     int16 current_dict_id = old_e->dictionary_id; 
@@ -129,20 +130,13 @@ update_edge(PG_FUNCTION_ARGS)
     int64 start_vid = old_e->start_id;  
     int64 end_vid = old_e->end_id;     
 
+    edge *new_e = (edge *) palloc0(sizeof(edge));
+    memcpy(new_e, old_e, sizeof(edge));
+    SET_VARSIZE(new_e, sizeof(edge));
 
     UnlockReleaseBuffer(obuf_check);
 
-    Size gt_size = VARSIZE(new_properties);
-    Size fixed_size = offsetof(edge, props); 
-    
-    edge *new_e = (edge *) palloc(fixed_size + gt_size);
-    memcpy(new_e, old_e, fixed_size);
-
-    memcpy((char *)new_e + fixed_size, &new_properties->root, gt_size);
-
-    SET_VARSIZE(new_e, fixed_size + gt_size);
-
-    Size actual_payload_size = VARSIZE(new_e);
+    Size actual_payload_size = np_entity_pack_size((struct varlena *) new_e, (struct varlena *) new_properties);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + actual_payload_size);
     
     char *tuple_buf = (char *) palloc0(total_tuple_size);
@@ -156,7 +150,7 @@ update_edge(PG_FUNCTION_ARGS)
     new_hdr->id = edge_id;
     new_hdr->prev_itemptr = old_edge_tid; 
     
-    memcpy(new_hdr->serialized_entity, new_e, actual_payload_size);
+    np_entity_pack(new_hdr->serialized_entity, (struct varlena *) new_e, (struct varlena *) new_properties);
     pfree(new_e);
 
     ItemPointerData new_edge_tid;
@@ -260,14 +254,14 @@ update_vertex(PG_FUNCTION_ARGS)
         ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", id)));
     }
 
-    vertex *old_v = (vertex *) old_hdr_check->serialized_entity;
+    vertex *old_v = (vertex *) np_entity_get_meta(old_hdr_check);
     int16 current_dictionary_id = old_v->dictionary_id;
 
     UnlockReleaseBuffer(obuf_check);
 
-    vertex *new_v = build_vertex_internal(id, graph_id, label_id, current_dictionary_id, new_properties);
+    vertex *new_v = build_vertex_internal(id, graph_id, label_id, current_dictionary_id);
 
-    Size actual_payload_size = VARSIZE(new_v);
+    Size actual_payload_size = np_entity_pack_size((struct varlena *) new_v, (struct varlena *) new_properties);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + actual_payload_size);
     
     char *tuple_buf = (char *) palloc(total_tuple_size);
@@ -281,7 +275,7 @@ update_vertex(PG_FUNCTION_ARGS)
     new_hdr->id = id;
     new_hdr->prev_itemptr = old_vertex_tid; 
     
-    memcpy(new_hdr->serialized_entity, new_v, actual_payload_size);
+    np_entity_pack(new_hdr->serialized_entity, (struct varlena *) new_v, (struct varlena *) new_properties);
     pfree(new_v);
 
     ItemPointerData new_vertex_tid;

@@ -38,12 +38,12 @@ SELECT vertex_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 9
 --
 -- Vertex basic constructor
 --
-SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{}'::gtype);
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"name": "Alice", "age": 30}'::gtype);
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"nested": {"a": 1, "b": [2, 3]}}'::gtype);
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"bool": true, "nullval": null, "float": 3.14}'::gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
 
-SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
 
 --
 -- Vertex LTree Label Logic
@@ -64,7 +64,7 @@ select * from np_vertex_21_2_linked_list_meta;
 \d+ np_vertex_21_2_annotations
  
  /*
-SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
@@ -79,7 +79,7 @@ SELECT create_vlabel('vertex_graph', 'ON_PTO');
 SELECT create_vlabel('vertex_graph', 'new_label', ARRAY['person']);
 
 /*
-SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
@@ -92,12 +92,12 @@ WHERE graph.name = 'vertex_graph'
 
 SELECT dictionary_log(21, 1, '["age", "name"]'::dictionary);
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 --
 -- Vertex with a Dictionary
@@ -106,12 +106,12 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice
 --
 SET neopostgraph.show_dictionary_nulls = true;
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 --
 -- Vertex with a Dictionary
@@ -120,28 +120,20 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alic
 --
 SET neopostgraph.show_dictionary_keys = false;
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 \dt public
 RESET neopostgraph.show_dictionary_keys;
 */
-select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
-select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint), '{"name": "Alice", "age": 30}'::gtype);
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint), '{"name": "Bob", "age": 33}'::gtype);
 
-select insert_edge(
-  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint)), '{}'::gtype);
 
 
 
@@ -150,15 +142,7 @@ select insert_edge(
 SELECT * FROM public.np_edge_21_1;
 
 
-select insert_edge(
-  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint)), '{}'::gtype);
 
 select * from np_vertex_21_2_linked_list_meta;
 
@@ -176,24 +160,15 @@ select * from np_vertex_21_1_phys_map;
 select * From np_vertex_1_1_1_linked_list;
 SELECT * FROM public.np_edge_21_1;
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype),
-   ARRAY['EMPLOYEED']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "Alice", "age": 30}'::gtype, ARRAY['EMPLOYEED']);
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype),
-   ARRAY['FREE']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "Bob", "age": 33}'::gtype, ARRAY['FREE']);
 select * from np_vertex_21_2;
 select * from np_vertex_21_2_annotations;
 
 
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_6'), 21, 6, 0::smallint, '{"name": "Charlie", "age": 36}'::gtype),
-   ARRAY['FREE']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_6'), 21, 6, 0::smallint), '{"name": "Charlie", "age": 36}'::gtype, ARRAY['FREE']);
 
 select * from np_vertex_21_6;
 select * from np_vertex_21_6_annotations;
@@ -201,28 +176,12 @@ select * from np_vertex_21_6_annotations;
 
 
 select * from np_vertex_21_1_phys_map;
-select insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{}'::gtype);
 select * from np_vertex_21_1_phys_map;
 select rotate_active_linked_list_table('vertex_graph', 2);
 select * from np_vertex_21_1_phys_map;
 
-select insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{}'::gtype);
 
 
 select * from np_vertex_21_1_phys_map;
@@ -259,34 +218,14 @@ select ctid, * from np_vertex_21_2;
 
 
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint), '{"name": "Alice", "age": 30}'::gtype);
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint), '{"name": "Bob", "age": 33}'::gtype);
 select * from np_vertex_21_1_phys_map;
 
-select insert_edge(
-  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint)), '{}'::gtype);
 
-select insert_edge(
-  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint)), '{}'::gtype);
 
 select * from np_vertex_21_3_phys_map;
 select * From np_vertex_21_3_1_linked_list;
@@ -340,10 +279,7 @@ select * from np_vertex_21_5_annotations;
 select * FROM np_vertex_label_21;
 SELECT add_annotation_label('vertex_graph', 'person', 'Active');
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "David", "age": 27}'::gtype),
-   ARRAY['Active']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "David", "age": 27}'::gtype, ARRAY['Active']);
 
 select * FROM np_vertex_label_21;
 select * from np_vertex_21_2;
@@ -449,13 +385,13 @@ SELECT merge_vlabels('drop_graph', 5, 4); -- Creates _.entity.organization.depar
 
 -- 2. Insert Test Vertices
 -- Insert into _.entity (ID 2)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_2'), 22, 2, 0::smallint, '{"name": "Generic Entity"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_2'), 22, 2, 0::smallint), '{"name": "Generic Entity"}'::gtype);
 
 -- Insert into _.entity.organization (ID 5)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::smallint, '{"name": "Acme Corp"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::smallint), '{"name": "Acme Corp"}'::gtype);
 
 -- Insert into _.entity.organization.department (ID 6)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint, '{"name": "Engineering"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint), '{"name": "Engineering"}'::gtype);
 
 -- Verify initial catalog state
 SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
@@ -538,25 +474,9 @@ SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 
 -- 1. Insert new edges to vertices that already have compacted arraylists.
 -- (Vertex 1 and 2 in table 2 of 'vertex_graph')
-SELECT insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{"status": "new_edge_A"}'::gtype)
-  );
+SELECT insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "new_edge_A"}'::gtype);
 
-SELECT insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{"status": "new_edge_B"}'::gtype)
-  );
+SELECT insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "new_edge_B"}'::gtype);
 
 -- 2. Check the physical map before rotation. 
 -- It should currently point to the old arraylist block.
@@ -602,15 +522,7 @@ ORDER BY v_itemptr;
 -- =====================================================================
 
 -- 1. Create a supernode by inserting 200 edges into Vertex 1
-SELECT count(insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
-      '{"status": "mass_insert"}'::gtype)
-  )) FROM generate_series(1, 200);
+SELECT count(insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "mass_insert"}'::gtype)) FROM generate_series(1, 200);
 
 -- 2. Rotate and Compact
 SELECT rotate_active_linked_list_table('vertex_graph', 2);
@@ -633,19 +545,11 @@ INSERT INTO supernode_relabel_ids VALUES ('SuperA', nextval('np_vertex_id_seq_21
 INSERT INTO supernode_relabel_ids VALUES ('TargetB', nextval('np_vertex_id_seq_21_2'));
 
 -- 2. Create the vertices
-SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype));
-SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype));
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), '{"name": "SuperRelabelA"}'::gtype);
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint), '{"name": "TargetRelabelB"}'::gtype);
 
 -- 3. Insert 200 edges to force block-chaining!
-SELECT count(insert_edge(
-  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
-  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
-      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
-      '{"test": "supernode_relabel"}'::gtype)
-)) FROM generate_series(1, 200);
+SELECT count(insert_edge(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint)), '{"test": "supernode_relabel"}'::gtype)) FROM generate_series(1, 200);
 
 -- 4. Compact the edges into the chunked bare-metal TAM arraylists
 SELECT rotate_active_linked_list_table('vertex_graph', 2);

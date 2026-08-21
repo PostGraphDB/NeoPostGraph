@@ -282,7 +282,7 @@ np_internal_fetch_vertex(int32 graph_id, int64 v_id, int32 v_label)
     LockBuffer(v_buf, BUFFER_LOCK_SHARE);
     NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(v_buf), PageGetItemId(BufferGetPage(v_buf), ItemPointerGetOffsetNumber(&v_tid)));
     
-    vertex *v = (vertex *)PG_DETOAST_DATUM_COPY(PointerGetDatum(hdr->serialized_entity));
+    vertex *v = (vertex *)PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(hdr)));
     
     UnlockReleaseBuffer(v_buf);
     table_close(v_rel, AccessShareLock);
@@ -290,7 +290,7 @@ np_internal_fetch_vertex(int32 graph_id, int64 v_id, int32 v_label)
 }
 
 static edge* 
-np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label) 
+np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label, gtype **out_props) 
 {
     const label_cache_data *cache = search_edge_label_graph_id_label_id_cache(graph_id, e_label);
     Relation pmap = table_open(cache->phys_map, AccessShareLock);
@@ -310,7 +310,9 @@ np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label)
     LockBuffer(e_buf, BUFFER_LOCK_SHARE);
     NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(e_buf), PageGetItemId(BufferGetPage(e_buf), ItemPointerGetOffsetNumber(&e_tid)));
     
-    edge *e = (edge *)PG_DETOAST_DATUM_COPY(PointerGetDatum(hdr->serialized_entity));
+    edge *e = (edge *)PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(hdr)));
+    if (out_props)
+        *out_props = np_entity_copy_props(hdr);
     
     UnlockReleaseBuffer(e_buf);
     table_close(e_rel, AccessShareLock);
@@ -375,7 +377,8 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
 
             if (!is_deleted) {
                 vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
-                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
+                gtype *e_props = NULL;
+                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid, &e_props);
 
                 np_internal_delete_edge(graph_id, e_lid, e_id, cid, current_fxid);
 
@@ -391,9 +394,9 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 vertex *actual_neighbor = (o_id == old_v->id && o_lid == old_v->label_id) ? new_v : neighbor_v;
 
                 if (e->start_id == new_v->id && e->start_label == new_v->label_id) {
-                    np_internal_insert_edge(new_v, actual_neighbor, e);
+                    np_internal_insert_edge(new_v, actual_neighbor, e, e_props);
                 } else {
-                    np_internal_insert_edge(actual_neighbor, new_v, e);
+                    np_internal_insert_edge(actual_neighbor, new_v, e, e_props);
                 }
 
                 pfree(neighbor_v);
@@ -423,6 +426,7 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
 /* Create arrays to hold the fetched payloads safely in memory */
             edge **migrated_edges = palloc(adj_copy->nitems * sizeof(edge *));
             vertex **migrated_neighbors = palloc(adj_copy->nitems * sizeof(vertex *));
+            gtype **migrated_props = palloc(adj_copy->nitems * sizeof(gtype *));
             int migrated_count = 0;
 
             /* ==========================================
@@ -437,7 +441,8 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 int32 o_lid = adj_copy->data[i].other_lid;
 
                 vertex *neighbor_v = np_internal_fetch_vertex(graph_id, o_id, o_lid);
-                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid);
+                gtype *e_props = NULL;
+                edge *e = np_internal_fetch_edge(graph_id, e_id, e_lid, &e_props);
 
                 if (e == NULL || neighbor_v == NULL) {
                     if (e) pfree(e);
@@ -451,6 +456,7 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 /* Save the pristine payloads for Pass 2 */
                 migrated_edges[migrated_count] = e;
                 migrated_neighbors[migrated_count] = neighbor_v;
+                migrated_props[migrated_count] = e_props;
                 migrated_count++;
             }
 
@@ -478,9 +484,9 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
                 
                 /* New Linked List buffers are pinned and written here, totally isolated from Delete */
                 if (e->start_id == new_v->id && e->start_label == new_v->label_id)
-                    np_internal_insert_edge(new_v, actual_neighbor, e);
+                    np_internal_insert_edge(new_v, actual_neighbor, e, migrated_props[i]);
                 else 
-                    np_internal_insert_edge(actual_neighbor, new_v, e);
+                    np_internal_insert_edge(actual_neighbor, new_v, e, migrated_props[i]);
 
                 pfree(neighbor_v);
                 pfree(e);
@@ -488,6 +494,7 @@ migrate_vertex_edges(int32 graph_id, vertex *old_v, vertex *new_v,
             
             pfree(migrated_edges);
             pfree(migrated_neighbors);
+            pfree(migrated_props);
             pfree(adj_copy);
         } else {
             UnlockReleaseBuffer(buf);
@@ -565,8 +572,9 @@ set_vertex_label(PG_FUNCTION_ARGS)
                     PageGetItemId(BufferGetPage(old_v_buf), ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
 
     /* 4. Prepare New Vertex Structs */
-    vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
-    vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
+    vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
+    vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
+    gtype *migrated_v_props = np_entity_copy_props(old_v_hdr);
 
     // RELEASE THE BUFFER LOCK IMMEDIATELY SO EDGE MIGRATION CAN READ THE PAGE
     UnlockReleaseBuffer(old_v_buf);
@@ -673,7 +681,7 @@ set_vertex_label(PG_FUNCTION_ARGS)
     }
 
     /* 5. Insert New Vertex (Handles payload and initializes the physical map) */
-    np_internal_insert_vertex(new_unpacked, extracted_annots, NULL);
+    np_internal_insert_vertex(new_unpacked, migrated_v_props, extracted_annots, NULL);
 
     /* 6. Edge Migration (Uses np_internal_insert_edge, which automatically updates the new phys map!) */
     migrate_vertex_edges(graph_id, old_unpacked, new_unpacked,
@@ -802,8 +810,9 @@ np_internal_remove_vertex_label(int64 old_vid, int32 current_label_id, int32 gra
                     PageGetItemId(BufferGetPage(old_v_buf), ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
 
     /* 4. Prepare New Vertex Structs */
-    vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
-    vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_v_hdr->serialized_entity));
+    vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
+    vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
+    gtype *migrated_v_props = np_entity_copy_props(old_v_hdr);
 
     // RELEASE THE BUFFER LOCK IMMEDIATELY SO EDGE MIGRATION CAN READ THE PAGE
     UnlockReleaseBuffer(old_v_buf);
@@ -989,7 +998,7 @@ np_internal_remove_vertex_label(int64 old_vid, int32 current_label_id, int32 gra
     }
 
     /* 5. Insert New Vertex (Handles payload and initializes the physical map) */
-    np_internal_insert_vertex(new_unpacked, extracted_annots, NULL);
+    np_internal_insert_vertex(new_unpacked, migrated_v_props, extracted_annots, NULL);
 
     /* 6. Edge Migration (Uses np_internal_insert_edge, which automatically updates the new phys map!) */
     migrate_vertex_edges(graph_id, old_unpacked, new_unpacked,
@@ -1888,7 +1897,8 @@ set_edge_label(PG_FUNCTION_ARGS)
                                     PageGetItemId(BufferGetPage(old_e_buf), ItemPointerGetOffsetNumber(&pmap_rec.e_itemptr)));
 
     /* Clone the payload in memory so we can safely mutate its label ID */
-    edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_e_hdr->serialized_entity));
+    edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_e_hdr)));
+    gtype *migrated_e_props = np_entity_copy_props(old_e_hdr);
     
     /* Safely cache the vertex routing info from the payload BEFORE we tombstone it */
     int64 start_v_id = new_unpacked->start_id;
@@ -1917,7 +1927,7 @@ set_edge_label(PG_FUNCTION_ARGS)
     vertex *end_v = np_internal_fetch_vertex(graph_id, end_v_id, end_v_label);
 
     /* 7. Insert New Edge Payload & Wire Adjacency Lists */
-    np_internal_insert_edge(start_v, end_v, new_unpacked); 
+    np_internal_insert_edge(start_v, end_v, new_unpacked, migrated_e_props); 
 
     pfree(start_v);
     pfree(end_v);
@@ -2212,7 +2222,8 @@ remove_edge_label(PG_FUNCTION_ARGS)
     NPEntityTupleHeader old_e_hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(old_e_buf), 
                                     PageGetItemId(BufferGetPage(old_e_buf), ItemPointerGetOffsetNumber(&pmap_rec.e_itemptr)));
 
-    edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(old_e_hdr->serialized_entity));
+    edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_e_hdr)));
+    gtype *migrated_e_props = np_entity_copy_props(old_e_hdr);
     
     /* Safely cache the vertex routing info BEFORE tombstoning */
     int64 start_v_id = new_unpacked->start_id;
@@ -2241,7 +2252,7 @@ remove_edge_label(PG_FUNCTION_ARGS)
     vertex *end_v = np_internal_fetch_vertex(graph_id, end_v_id, end_v_label);
 
     /* 7. Insert New Edge Payload & Wire Adjacency Lists */
-    np_internal_insert_edge(start_v, end_v, new_unpacked); 
+    np_internal_insert_edge(start_v, end_v, new_unpacked, migrated_e_props); 
 
     pfree(start_v);
     pfree(end_v);

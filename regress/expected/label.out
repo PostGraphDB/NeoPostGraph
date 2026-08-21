@@ -492,3 +492,82 @@ SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
   6 | _.account      | f
 (6 rows)
 
+---
+--- rename_elabel: rewrite ltree tokens, including is_primary = false
+---
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+ id |          ltree          | is_primary 
+----+-------------------------+------------
+  1 | _                       | t
+  2 | _.knows                 | t
+  3 | _.likes                 | t
+  4 | _.reports_to            | t
+  5 | _.reports_to.reports_to | t
+(5 rows)
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'likes', 'appreciates', 'public');
+NOTICE:  elabel "likes" has been renamed to "appreciates"
+ rename_elabel 
+---------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+ id |          ltree          | is_primary 
+----+-------------------------+------------
+  1 | _                       | t
+  2 | _.knows                 | t
+  3 | _.appreciates           | t
+  4 | _.reports_to            | t
+  5 | _.reports_to.reports_to | t
+(5 rows)
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'appreciates', 'appreciates', 'public');
+NOTICE:  elabel "appreciates" is already named "appreciates"
+ rename_elabel 
+---------------
+ 
+(1 row)
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'appreciates', 'knows', 'public');
+ERROR:  label "knows" already exists
+SELECT NeoPostGraph.rename_elabel('label_graph', 'missing_label', 'x', 'public');
+ERROR:  elabel "missing_label" does not exist
+SELECT NeoPostGraph.rename_elabel('missing_graph', 'knows', 'x', 'public');
+ERROR:  graph "missing_graph" does not exist in the namespace "public"
+SELECT NeoPostGraph.rename_elabel('label_graph', 'knows', 'has.dot', 'public');
+ERROR:  labels cannot contain dots
+SELECT NeoPostGraph.drop_elabel('label_graph', 'reports_to');
+NOTICE:  Structural edge label "reports_to" has been dropped. Modified 2 physical partition(s) in O(1) time.
+ drop_elabel 
+-------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+ id |     ltree     | is_primary 
+----+---------------+------------
+  1 | _             | t
+  2 | _.knows       | t
+  3 | _.appreciates | t
+  4 | _             | f
+  5 | _.reports_to  | t
+(5 rows)
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'knows', 'acquainted', 'public');
+NOTICE:  elabel "knows" has been renamed to "acquainted"
+ rename_elabel 
+---------------
+ 
+(1 row)
+
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+ id |     ltree     | is_primary 
+----+---------------+------------
+  1 | _             | t
+  2 | _.acquainted  | t
+  3 | _.appreciates | t
+  4 | _             | f
+  5 | _.reports_to  | t
+(5 rows)
+

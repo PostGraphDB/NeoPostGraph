@@ -36,11 +36,11 @@ SELECT edge_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92]
 --
 -- Edge basic constructor
 --
-SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{}'::gtype);
-SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Alice", "age": 30}'::gtype);
-SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"nested": {"a": 1, "b": [2, 3]}}'::gtype);
-SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"bool": true, "nullval": null, "float": 3.14}'::gtype);
-SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'));
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'));
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'));
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'));
+SELECT edge_build(0::int8, 0, 0, 0::smallint, vertex_in('{}'), vertex_in('{}'));
 
 --
 -- Vertex LTree Label Logic
@@ -54,14 +54,14 @@ select * FROM np_edge_label_26;
 \d+ np_edge_label_26
 \d+ np_edge_26_2
 
-SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'),'{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype)
+SELECT edge_build(0::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'))
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'
   AND label.ltree @ 'person';
 
 SELECT create_elabel('edge_graph', 'person.employee.engineer');
 
-SELECT edge_build(1::int8, graph.id, label.id, 0::smallint,vertex_in('{}'), vertex_in('{}'),'{"name": "Alice", "age": 30}'::gtype)
+SELECT edge_build(1::int8, graph.id, label.id, 0::smallint, vertex_in('{}'), vertex_in('{}'))
 FROM np_edge_label_26 label, np_graph graph
 WHERE graph.name = 'edge_graph'
   AND label.ltree @ 'person';
@@ -74,8 +74,8 @@ WHERE graph.name = 'edge_graph'
 SELECT create_vlabel('edge_graph', 'node');
 
 -- Insert Vertices explicitly using nextval
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_31_2')::int8, 31, 2, 0::smallint, '{}'::gtype));
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_31_2')::int8, 31, 2, 0::smallint, '{}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_31_2')::int8, 31, 2, 0::smallint), '{}'::gtype);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_31_2')::int8, 31, 2, 0::smallint), '{}'::gtype);
 
 -- 2. Setup: Base edge labels (These become 4 and 5)
 SELECT create_elabel('edge_graph', 'colleague');
@@ -88,15 +88,7 @@ SELECT merge_elabels('edge_graph', 4, 5);
 SELECT id, ltree FROM np_edge_label_31 WHERE ltree = '_.colleague.manager'::ltree;
 
 -- 4. Setup: Insert edge 1 between Vertex 1 and Vertex 2
-SELECT insert_edge(
-    vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
-    vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
-    edge_build(nextval('np_edge_id_seq_31_4')::int8, 31, 4, 0::smallint, 
-        vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
-        vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
-        '{"department": "engineering"}'::gtype
-    )
-);
+SELECT insert_edge(vertex_build(1::int8, 31, 2, 0::smallint), vertex_build(2::int8, 31, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_31_4')::int8, 31, 4, 0::smallint, vertex_build(1::int8, 31, 2, 0::smallint), vertex_build(2::int8, 31, 2, 0::smallint)), '{"department": "engineering"}'::gtype);
 
 SELECT * FROM np_edge_31_4;
 
@@ -121,15 +113,7 @@ SELECT * FROM np_edge_31_4 WHERE id = 1;
 SELECT create_elabel('edge_graph', 'friend', 'public', ARRAY['close', 'distant']);
 
 -- 2. Insert a new edge (Edge ID 2, Label ID 9) between Vertex 1 and 2
-SELECT insert_edge(
-    vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
-    vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
-    edge_build(2::int8, 31, 9, 0::smallint, 
-        vertex_build(1::int8, 31, 2, 0::smallint, '{}'::gtype),
-        vertex_build(2::int8, 31, 2, 0::smallint, '{}'::gtype),
-        '{"met": "college"}'::gtype
-    )
-);
+SELECT insert_edge(vertex_build(1::int8, 31, 2, 0::smallint), vertex_build(2::int8, 31, 2, 0::smallint), edge_build(2::int8, 31, 9, 0::smallint, vertex_build(1::int8, 31, 2, 0::smallint), vertex_build(2::int8, 31, 2, 0::smallint)), '{"met": "college"}'::gtype);
 
 -- 3. Initial State: Output should show base label "friend"
 SELECT * FROM np_edge_31_9 WHERE id = 2;
@@ -196,34 +180,13 @@ SELECT merge_elabels('drop_elabel_graph', 5, 4); -- Creates _.knows.works_with.r
 
 -- Vertices so we can store edges in the partitions
 SELECT create_vlabel('drop_elabel_graph', 'node');
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "A"}'::gtype));
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint, '{"name": "B"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint), '{"name": "A"}'::gtype);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_32_2')::int8, 32, 2, 0::smallint), '{"name": "B"}'::gtype);
 
 -- Insert an edge into each structural partition that will be remapped
-SELECT insert_edge(
-    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-    edge_build(nextval('np_edge_id_seq_32_2')::int8, 32, 2, 0::smallint,
-        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-        '{"kind": "knows"}'::gtype)
-);
-SELECT insert_edge(
-    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-    edge_build(nextval('np_edge_id_seq_32_5')::int8, 32, 5, 0::smallint,
-        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-        '{"kind": "works_with"}'::gtype)
-);
-SELECT insert_edge(
-    vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-    vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-    edge_build(nextval('np_edge_id_seq_32_6')::int8, 32, 6, 0::smallint,
-        vertex_build(1::int8, 32, 2, 0::smallint, '{}'::gtype),
-        vertex_build(2::int8, 32, 2, 0::smallint, '{}'::gtype),
-        '{"kind": "reports_to"}'::gtype)
-);
+SELECT insert_edge(vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_32_2')::int8, 32, 2, 0::smallint, vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint)), '{"kind": "knows"}'::gtype);
+SELECT insert_edge(vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_32_5')::int8, 32, 5, 0::smallint, vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint)), '{"kind": "works_with"}'::gtype);
+SELECT insert_edge(vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_32_6')::int8, 32, 6, 0::smallint, vertex_build(1::int8, 32, 2, 0::smallint), vertex_build(2::int8, 32, 2, 0::smallint)), '{"kind": "reports_to"}'::gtype);
 
 -- Verify initial catalog state
 SELECT id, ltree, tbl, is_primary FROM np_edge_label_32 ORDER BY id;

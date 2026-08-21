@@ -21,15 +21,15 @@ SELECT FROM vertex_in('{"name": "Alice", "age": 30}');
 (1 row)
 
 SELECT vertex_in('{"name": "Alice", "age": 30}');
-                             vertex_in                              
---------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 SELECT * FROM vertex_in('{"name": "Alice", "age": 30}');
-                             vertex_in                              
---------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 --
@@ -43,60 +43,60 @@ SELECT vertex_in('{}');
 (1 row)
 
 SELECT vertex_in('{"name": "Alice", "age": 30}');
-                             vertex_in                              
---------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 SELECT vertex_in('{"nested": {"a": 1, "b": [2, 3]}}');
-                                vertex_in                                
--------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 SELECT vertex_in('{"bool": true, "nullval": null, "float": 3.14}');
-                                      vertex_in                                       
---------------------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 SELECT vertex_in('{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}');
-                                                        vertex_in                                                        
--------------------------------------------------------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
+                vertex_in                 
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 --
 -- Vertex basic constructor
 --
-SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{}'::gtype);
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
                vertex_build               
 ------------------------------------------
  {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"name": "Alice", "age": 30}'::gtype);
-                            vertex_build                            
---------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"age": 30, "name": "Alice"}}
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+               vertex_build               
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"nested": {"a": 1, "b": [2, 3]}}'::gtype);
-                              vertex_build                               
--------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"nested": {"a": 1, "b": [2, 3]}}}
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+               vertex_build               
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-SELECT vertex_build(0::int8, 0, 0, 0::smallint,'{"bool": true, "nullval": null, "float": 3.14}'::gtype);
-                                     vertex_build                                     
---------------------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"bool": true, "float": 3.14, "nullval": null}}
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+               vertex_build               
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
-SELECT vertex_build(0::int8, 0, 0, 0::smallint, '{"name": "Bob", "tags": ["dev", "graph"], "scores": [95, 87, 92], "active": true}'::gtype);
-                                                      vertex_build                                                       
--------------------------------------------------------------------------------------------------------------------------
- {"id": 0, "label": "", "properties": {"name": "Bob", "tags": ["dev", "graph"], "active": true, "scores": [95, 87, 92]}}
+SELECT vertex_build(0::int8, 0, 0, 0::smallint);
+               vertex_build               
+------------------------------------------
+ {"id": 0, "label": "", "properties": {}}
 (1 row)
 
 --
@@ -136,14 +136,16 @@ select * from np_vertex_21_2_linked_list_meta;
 (1 row)
 
 \d+ np_vertex_21_2
-                              Table "public.np_vertex_21_2"
- Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------+-----------+----------+---------+----------+--------------+-------------
- id     | bigint |           | not null |         | plain    |              | 
- vertex | vertex |           | not null |         | extended |              | 
+                                Table "public.np_vertex_21_2"
+   Column   |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
+------------+--------+-----------+----------+---------+----------+--------------+-------------
+ id         | bigint |           | not null |         | plain    |              | 
+ vertex     | vertex |           | not null |         | extended |              | 
+ properties | gtype  |           | not null |         | extended |              | 
 Not-null constraints:
     "np_vertex_21_2_id_not_null" NOT NULL "id"
     "np_vertex_21_2_vertex_not_null" NOT NULL "vertex"
+    "np_vertex_21_2_properties_not_null" NOT NULL "properties"
 
 \d+ np_vertex_21_2_phys_map
                             Table "public.np_vertex_21_2_phys_map"
@@ -199,7 +201,7 @@ Not-null constraints:
 
  
  /*
-SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+SELECT vertex_build(0::int8, graph.id, label.id, 0::smallint)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
@@ -239,7 +241,7 @@ ERROR:  Label 'ON_PTO' is already registered as a annotation label
 SELECT create_vlabel('vertex_graph', 'new_label', ARRAY['person']);
 ERROR:  Label 'person' is already registered as a structural label
 /*
-SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint,'{"name": "Alice", "age": 30}'::gtype)
+SELECT vertex_build(1::int8, graph.id, label.id, 0::smallint)
 FROM np_vertex_label_21 label, np_graph graph
 WHERE graph.name = 'vertex_graph'
   AND label.ltree @ 'person';
@@ -252,12 +254,12 @@ WHERE graph.name = 'vertex_graph'
 
 SELECT dictionary_log(21, 1, '["age", "name"]'::dictionary);
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 --
 -- Vertex with a Dictionary
@@ -266,12 +268,12 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice
 --
 SET neopostgraph.show_dictionary_nulls = true;
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 --
 -- Vertex with a Dictionary
@@ -280,67 +282,53 @@ SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alic
 --
 SET neopostgraph.show_dictionary_keys = false;
 
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Alice", "age": 30, "weight": 9001}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"name": "Bob"}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint, '{"x": 1, "y": 2}'::gtype), 1);
-SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30, "extra": {"nested": true}, "flag": true}'::gtype), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
+SELECT vertex_set_dictionary(vertex_build(1, 21, 1, 0::smallint), 1);
 
 \dt public
 RESET neopostgraph.show_dictionary_keys;
 */
-select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype));
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint), '{"name": "Alice", "age": 30}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
-select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype));
+select insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_1'), 21, 1, 0::smallint), '{"name": "Bob", "age": 33}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
-select insert_edge(
-  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
 (1 row)
 
 \d+ np_edge_21_1
-                               Table "public.np_edge_21_1"
- Column |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------+-----------+----------+---------+----------+--------------+-------------
- id     | bigint |           | not null |         | plain    |              | 
- edge   | edge   |           | not null |         | extended |              | 
+                                 Table "public.np_edge_21_1"
+   Column   |  Type  | Collation | Nullable | Default | Storage  | Stats target | Description 
+------------+--------+-----------+----------+---------+----------+--------------+-------------
+ id         | bigint |           | not null |         | plain    |              | 
+ edge       | edge   |           | not null |         | extended |              | 
+ properties | gtype  |           | not null |         | extended |              | 
 Not-null constraints:
     "np_edge_21_1_id_not_null" NOT NULL "id"
     "np_edge_21_1_edge_not_null" NOT NULL "edge"
+    "np_edge_21_1_properties_not_null" NOT NULL "properties"
 
 SELECT * FROM public.np_edge_21_1;
- id |                                          edge                                          
-----+----------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+ id |                                          edge                                          | properties 
+----+----------------------------------------------------------------------------------------+------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}} | {}
 (1 row)
 
-select insert_edge(
-  vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 1, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 1, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 1, 0::smallint), vertex_build(2, 21, 1, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
@@ -403,35 +391,29 @@ ERROR:  relation "np_vertex_1_1_1_linked_list" does not exist
 LINE 1: select * From np_vertex_1_1_1_linked_list;
                       ^
 SELECT * FROM public.np_edge_21_1;
- id |                                          edge                                          
-----+----------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
+ id |                                          edge                                          | properties 
+----+----------------------------------------------------------------------------------------+------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}} | {}
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}} | {}
 (2 rows)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Alice", "age": 30}'::gtype),
-   ARRAY['EMPLOYEED']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "Alice", "age": 30}'::gtype, ARRAY['EMPLOYEED']);
  insert_vertex 
 ---------------
  
 (1 row)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "Bob", "age": 33}'::gtype),
-   ARRAY['FREE']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "Bob", "age": 33}'::gtype, ARRAY['FREE']);
  insert_vertex 
 ---------------
  
 (1 row)
 
 select * from np_vertex_21_2;
- id |                                       vertex                                       
-----+------------------------------------------------------------------------------------
-  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alice"}}
-  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}
+ id |                                       vertex                                       |          properties          
+----+------------------------------------------------------------------------------------+------------------------------
+  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alice"}} | {"age": 30, "name": "Alice"}
+  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}        | {"age": 33, "name": "Bob"}
 (2 rows)
 
 select * from np_vertex_21_2_annotations;
@@ -441,19 +423,16 @@ select * from np_vertex_21_2_annotations;
   2 | \x02
 (2 rows)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_6'), 21, 6, 0::smallint, '{"name": "Charlie", "age": 36}'::gtype),
-   ARRAY['FREE']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_6'), 21, 6, 0::smallint), '{"name": "Charlie", "age": 36}'::gtype, ARRAY['FREE']);
  insert_vertex 
 ---------------
  
 (1 row)
 
 select * from np_vertex_21_6;
- id |                                              vertex                                               
-----+---------------------------------------------------------------------------------------------------
-  1 | {"id": 1, "label": "person:employee:engineer:FREE", "properties": {"age": 36, "name": "Charlie"}}
+ id |                                              vertex                                               |           properties           
+----+---------------------------------------------------------------------------------------------------+--------------------------------
+  1 | {"id": 1, "label": "person:employee:engineer:FREE", "properties": {"age": 36, "name": "Charlie"}} | {"age": 36, "name": "Charlie"}
 (1 row)
 
 select * from np_vertex_21_6_annotations;
@@ -469,15 +448,7 @@ select * from np_vertex_21_1_phys_map;
  (0,2)     | np_vertex_21_1_1_linked_list | (0,4)     | (4294967295,0)
 (2 rows)
 
-select insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
@@ -503,15 +474,7 @@ select * from np_vertex_21_1_phys_map;
  (0,2)     | np_vertex_21_1_1_linked_list | (0,4)     | (4294967295,0)
 (2 rows)
 
-select insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
@@ -568,8 +531,8 @@ select * From np_vertex_21_2_2_linked_list;
 SELECT * FROM np_vertex_21_2_arraylist;
  id |          prev_table          | prev_itemptr |                                                                  adj_list                                                                   | next_itemptr 
 ----+------------------------------+--------------+---------------------------------------------------------------------------------------------------------------------------------------------+--------------
-  1 | np_vertex_21_2_2_linked_list | (0,1)        | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
-  2 | np_vertex_21_2_2_linked_list | (0,2)        | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  1 | np_vertex_21_2_2_linked_list | (0,1)        | [{"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | np_vertex_21_2_2_linked_list | (0,2)        | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select rotate_active_linked_list_table('vertex_graph', 2);
@@ -621,8 +584,8 @@ select * from np_vertex_21_2_linked_list_meta;
 SELECT * FROM np_vertex_21_2_arraylist;
  id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
 ----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
-  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 826, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
-  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 826, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 829, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 829, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select compact_oldest_linked_list_table('vertex_graph', 2);
@@ -651,10 +614,10 @@ select ctid, * from np_vertex_21_2_phys_map;
 (2 rows)
 
 select ctid, * from np_vertex_21_2;
- ctid  | id |                                       vertex                                       
--------+----+------------------------------------------------------------------------------------
- (0,1) |  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alice"}}
- (0,2) |  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}
+ ctid  | id |                                       vertex                                       |          properties          
+-------+----+------------------------------------------------------------------------------------+------------------------------
+ (0,1) |  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alice"}} | {"age": 30, "name": "Alice"}
+ (0,2) |  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}        | {"age": 33, "name": "Bob"}
 (2 rows)
 
 select update_vertex(1::int8, 2::int4, 21::int4, '{"age": 30, "name": "Alex"}'::gtype);
@@ -671,10 +634,10 @@ select ctid, * from np_vertex_21_2_phys_map;
 (2 rows)
 
 select ctid, * from np_vertex_21_2;
- ctid  | id |                                      vertex                                       
--------+----+-----------------------------------------------------------------------------------
- (0,2) |  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}
- (0,3) |  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}}
+ ctid  | id |                                      vertex                                       |         properties          
+-------+----+-----------------------------------------------------------------------------------+-----------------------------
+ (0,2) |  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}       | {"age": 33, "name": "Bob"}
+ (0,3) |  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}} | {"age": 30, "name": "Alex"}
 (2 rows)
 
 SELECT create_vlabel('vertex_graph', 'thirdLabel');
@@ -684,17 +647,13 @@ NOTICE:  vlabel "thirdLabel" has been created
  
 (1 row)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Alice", "age": 30}'::gtype)
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint), '{"name": "Alice", "age": 30}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint, '{"name": "Bob", "age": 33}'::gtype)
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_3'), 21, 3, 0::smallint), '{"name": "Bob", "age": 33}'::gtype);
  insert_vertex 
 ---------------
  
@@ -707,29 +666,13 @@ select * from np_vertex_21_1_phys_map;
  (0,2)     | np_vertex_21_1_1_linked_list | (0,4)     | (4294967295,0)
 (2 rows)
 
-select insert_edge(
-  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
 (1 row)
 
-select insert_edge(
-  vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 3, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 3, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{}'::gtype)
-  );
+select insert_edge(vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 3, 0::smallint), vertex_build(2, 21, 3, 0::smallint)), '{}'::gtype);
  insert_edge 
 -------------
  
@@ -787,19 +730,19 @@ select * From np_vertex_21_3_2_linked_list;
 SELECT * FROM np_vertex_21_3_arraylist;
  id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
 ----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
-  1 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 838, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
-  2 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 838, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  1 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 840, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 3, "xmin": 841, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 5, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 840, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 6, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 3, "xmin": 841, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                          edge                                          
-----+----------------------------------------------------------------------------------------
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
+ id |                                          edge                                          | properties 
+----+----------------------------------------------------------------------------------------+------------
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}} | {}
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}} | {}
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}} | {}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}} | {}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}} | {}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}} | {}
 (6 rows)
 
 select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::date}'::gtype);
@@ -809,14 +752,14 @@ select update_edge(1::int8, 1::int4, 21::int4, '{"known_since": "12/31/1971"::da
 (1 row)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                                      edge                                                       
-----+-----------------------------------------------------------------------------------------------------------------
-  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}}
+ id |                                                      edge                                                       |         properties          
+----+-----------------------------------------------------------------------------------------------------------------+-----------------------------
+  2 | {"id": 2, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {}}                          | {}
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}                          | {}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}                          | {}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}                          | {}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}                          | {}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}} | {"known_since": 12-31-1971}
 (6 rows)
 
 select * from np_vertex_21_1_1_linked_list;
@@ -835,13 +778,13 @@ select delete_edge(2::int8, 1::int4, 21::int4);
 (1 row)
 
 SELECT * FROM public.np_edge_21_1;
- id |                                                      edge                                                       
-----+-----------------------------------------------------------------------------------------------------------------
-  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}
-  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
-  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}
-  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}}
+ id |                                                      edge                                                       |         properties          
+----+-----------------------------------------------------------------------------------------------------------------+-----------------------------
+  3 | {"id": 3, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}                          | {}
+  4 | {"id": 4, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "_", "properties": {}}                          | {}
+  5 | {"id": 5, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}                          | {}
+  6 | {"id": 6, "start_vertex": (3,1), "edge_vertex": (3,2), "label": "_", "properties": {}}                          | {}
+  1 | {"id": 1, "start_vertex": (1,1), "edge_vertex": (1,2), "label": "_", "properties": {"known_since": 12-31-1971}} | {"known_since": 12-31-1971}
 (5 rows)
 
 select * from np_vertex_21_1_1_linked_list;
@@ -852,19 +795,19 @@ select * from np_vertex_21_1_1_linked_list;
 (2 rows)
 
 SELECT * FROM public.np_vertex_21_1;
- id |                               vertex                               
-----+--------------------------------------------------------------------
-  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}}
-  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+ id |                               vertex                               |          properties          
+----+--------------------------------------------------------------------+------------------------------
+  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}} | {"age": 30, "name": "Alice"}
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}   | {"age": 33, "name": "Bob"}
 (2 rows)
 
 select delete_vertex(1::int8, 1::int4, 21::int4, false);
 ERROR:  Cannot delete vertex 1 because it still has active edges. Use DETACH DELETE.
 SELECT * FROM public.np_vertex_21_1;
- id |                               vertex                               
-----+--------------------------------------------------------------------
-  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}}
-  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+ id |                               vertex                               |          properties          
+----+--------------------------------------------------------------------+------------------------------
+  1 | {"id": 1, "label": "", "properties": {"age": 30, "name": "Alice"}} | {"age": 30, "name": "Alice"}
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}   | {"age": 33, "name": "Bob"}
 (2 rows)
 
 select * from np_vertex_21_1_phys_map;
@@ -897,9 +840,9 @@ select delete_vertex(1::int8, 1::int4, 21::int4, true);
 (1 row)
 
 SELECT * FROM public.np_vertex_21_1;
- id |                              vertex                              
-----+------------------------------------------------------------------
-  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+ id |                              vertex                              |         properties         
+----+------------------------------------------------------------------+----------------------------
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}} | {"age": 33, "name": "Bob"}
 (1 row)
 
 select * from np_vertex_21_1_phys_map;
@@ -980,10 +923,7 @@ NOTICE:  Annotation label "Active" cascaded to 4 structural label(s) under "pers
  
 (1 row)
 
-SELECT insert_vertex(
-  vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint, '{"name": "David", "age": 27}'::gtype),
-   ARRAY['Active']
-);
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_21_2'), 21, 2, 0::smallint), '{"name": "David", "age": 27}'::gtype, ARRAY['Active']);
  insert_vertex 
 ---------------
  
@@ -1003,11 +943,11 @@ select * FROM np_vertex_label_21;
 (8 rows)
 
 select * from np_vertex_21_2;
- id |                                      vertex                                       
-----+-----------------------------------------------------------------------------------
-  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}
-  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}}
-  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}
+ id |                                      vertex                                       |          properties          
+----+-----------------------------------------------------------------------------------+------------------------------
+  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}       | {"age": 33, "name": "Bob"}
+  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}} | {"age": 30, "name": "Alex"}
+  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}   | {"age": 27, "name": "David"}
 (3 rows)
 
 select * from np_vertex_21_2_annotations;
@@ -1041,11 +981,11 @@ select add_vertex_annotation_label(1, 2, 21, 'Active');
 (1 row)
 
 select * from np_vertex_21_2;
- id |                                          vertex                                          
-----+------------------------------------------------------------------------------------------
-  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}
-  1 | {"id": 1, "label": "person:EMPLOYEED:Active", "properties": {"age": 30, "name": "Alex"}}
-  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}
+ id |                                          vertex                                          |          properties          
+----+------------------------------------------------------------------------------------------+------------------------------
+  2 | {"id": 2, "label": "person:FREE", "properties": {"age": 33, "name": "Bob"}}              | {"age": 33, "name": "Bob"}
+  1 | {"id": 1, "label": "person:EMPLOYEED:Active", "properties": {"age": 30, "name": "Alex"}} | {"age": 30, "name": "Alex"}
+  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}          | {"age": 27, "name": "David"}
 (3 rows)
 
 select * from np_vertex_21_2_annotations;
@@ -1063,11 +1003,11 @@ select remove_vertex_annotation_label(2, 2, 21, 'FREE');
 (1 row)
 
 select * from np_vertex_21_2;
- id |                                          vertex                                          
-----+------------------------------------------------------------------------------------------
-  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}
-  1 | {"id": 1, "label": "person:EMPLOYEED:Active", "properties": {"age": 30, "name": "Alex"}}
-  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}
+ id |                                          vertex                                          |          properties          
+----+------------------------------------------------------------------------------------------+------------------------------
+  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}                   | {"age": 33, "name": "Bob"}
+  1 | {"id": 1, "label": "person:EMPLOYEED:Active", "properties": {"age": 30, "name": "Alex"}} | {"age": 30, "name": "Alex"}
+  3 | {"id": 3, "label": "person:Active", "properties": {"age": 27, "name": "David"}}          | {"age": 27, "name": "David"}
 (3 rows)
 
 select * from np_vertex_21_2_annotations;
@@ -1099,11 +1039,11 @@ select * FROM np_vertex_label_21;
 (8 rows)
 
 select * from np_vertex_21_2;
- id |                                      vertex                                       
-----+-----------------------------------------------------------------------------------
-  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}
-  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}}
-  3 | {"id": 3, "label": "person", "properties": {"age": 27, "name": "David"}}
+ id |                                      vertex                                       |          properties          
+----+-----------------------------------------------------------------------------------+------------------------------
+  2 | {"id": 2, "label": "person", "properties": {"age": 33, "name": "Bob"}}            | {"age": 33, "name": "Bob"}
+  1 | {"id": 1, "label": "person:EMPLOYEED", "properties": {"age": 30, "name": "Alex"}} | {"age": 30, "name": "Alex"}
+  3 | {"id": 3, "label": "person", "properties": {"age": 27, "name": "David"}}          | {"age": 27, "name": "David"}
 (3 rows)
 
 select * from np_vertex_21_2_annotations;
@@ -1131,9 +1071,9 @@ select * from np_vertex_21_6_annotations;
 (1 row)
 
 SELECT * FROM public.np_vertex_21_1;
- id |                              vertex                              
-----+------------------------------------------------------------------
-  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}}
+ id |                              vertex                              |         properties         
+----+------------------------------------------------------------------+----------------------------
+  2 | {"id": 2, "label": "", "properties": {"age": 33, "name": "Bob"}} | {"age": 33, "name": "Bob"}
 (1 row)
 
 select * from np_vertex_21_2_phys_map;
@@ -1161,8 +1101,8 @@ select * From np_vertex_21_2_2_linked_list;
 SELECT * FROM np_vertex_21_2_arraylist;
  id | prev_table | prev_itemptr |                                                                                                                                        adj_list                                                                                                                                        | next_itemptr 
 ----+------------+--------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------
-  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 826, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
-  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 826, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 824, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  1 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 829, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
+  2 | -          |              | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 829, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 827, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}] | 
 (2 rows)
 
 select set_vertex_label(2, 2, 21, 'missing_label');
@@ -1174,9 +1114,9 @@ NOTICE:  Merged vlabel "_.person.missing_label" has been created
 (1 row)
 
 select * FROM np_vertex_21_10;
- id |                                        vertex                                        
-----+--------------------------------------------------------------------------------------
-  1 | {"id": 1, "label": "person:missing_label", "properties": {"age": 33, "name": "Bob"}}
+ id |                                        vertex                                        |         properties         
+----+--------------------------------------------------------------------------------------+----------------------------
+  1 | {"id": 1, "label": "person:missing_label", "properties": {"age": 33, "name": "Bob"}} | {"age": 33, "name": "Bob"}
 (1 row)
 
 select * FROM np_vertex_21_10_phys_map;
@@ -1243,8 +1183,8 @@ select remove_vertex_label(1::int8, 10::int4, 21::int4, 'missing_label');
 (1 row)
 
 select * FROM np_vertex_21_10;
- id | vertex 
-----+--------
+ id | vertex | properties 
+----+--------+------------
 (0 rows)
 
 select id, vertex FROM np_vertex_21_2 WHERE id = 4;
@@ -1267,14 +1207,14 @@ select id, ltree, tbl FROM np_vertex_label_21 WHERE ltree = '_.person.engineer';
 (1 row)
 
 select * FROM np_vertex_21_11;
- id |                                       vertex                                        
-----+-------------------------------------------------------------------------------------
-  1 | {"id": 1, "label": "person:engineer", "properties": {"age": 36, "name": "Charlie"}}
+ id |                                       vertex                                        |           properties           
+----+-------------------------------------------------------------------------------------+--------------------------------
+  1 | {"id": 1, "label": "person:engineer", "properties": {"age": 36, "name": "Charlie"}} | {"age": 36, "name": "Charlie"}
 (1 row)
 
 select * FROM np_vertex_21_6;
- id | vertex 
-----+--------
+ id | vertex | properties 
+----+--------+------------
 (0 rows)
 
 -- =====================================================================
@@ -1375,21 +1315,21 @@ NOTICE:  Merged vlabel "_.entity.organization.department" has been created
 
 -- 2. Insert Test Vertices
 -- Insert into _.entity (ID 2)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_2'), 22, 2, 0::smallint, '{"name": "Generic Entity"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_2'), 22, 2, 0::smallint), '{"name": "Generic Entity"}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
 -- Insert into _.entity.organization (ID 5)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::smallint, '{"name": "Acme Corp"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_5'), 22, 5, 0::smallint), '{"name": "Acme Corp"}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
 -- Insert into _.entity.organization.department (ID 6)
-SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint, '{"name": "Engineering"}'::gtype));
+SELECT insert_vertex(vertex_build(nextval('np_vertex_id_seq_22_6'), 22, 6, 0::smallint), '{"name": "Engineering"}'::gtype);
  insert_vertex 
 ---------------
  
@@ -1592,29 +1532,13 @@ SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 -- =====================================================================
 -- 1. Insert new edges to vertices that already have compacted arraylists.
 -- (Vertex 1 and 2 in table 2 of 'vertex_graph')
-SELECT insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{"status": "new_edge_A"}'::gtype)
-  );
+SELECT insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "new_edge_A"}'::gtype);
  insert_edge 
 -------------
  
 (1 row)
 
-SELECT insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice", "age": 30}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob", "age": 33}'::gtype),
-      '{"status": "new_edge_B"}'::gtype)
-  );
+SELECT insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "new_edge_B"}'::gtype);
  insert_edge 
 -------------
  
@@ -1660,8 +1584,8 @@ FROM np_vertex_21_2_arraylist
 ORDER BY id;
  id |                                                                                                                                  adj_list                                                                                                                                  
 ----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 826, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 824, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}]
-  2 | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 826, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 824, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}]
+  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 829, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 827, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}]
+  2 | [{"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 829, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 827, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}]
 (2 rows)
 
 -- 3. Rotate the active linked list so the new edges can be compacted
@@ -1684,9 +1608,9 @@ FROM np_vertex_21_2_arraylist
 ORDER BY id;
  id |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       adj_list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
 ----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 851, "xmax": 852, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 851, "xmax": 852, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 852, "xmax": 854, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 852, "xmax": 854, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 7, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 871, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 872, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 826, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 824, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}]
-  2 | [{"edge_id": 7, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 871, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 872, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 826, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 824, "xmax": 851, "cmin": 0, "cmax": 50, "flags": 0}]
-  4 | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 852, "xmax": 854, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 852, "xmax": 854, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 854, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 854, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}]
+  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 854, "xmax": 855, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 854, "xmax": 855, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 855, "xmax": 857, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 855, "xmax": 857, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 7, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 874, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 875, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 829, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 827, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}]
+  2 | [{"edge_id": 7, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 874, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 875, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 829, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 827, "xmax": 854, "cmin": 0, "cmax": 50, "flags": 0}]
+  4 | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 855, "xmax": 857, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 855, "xmax": 857, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 857, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 857, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}]
 (3 rows)
 
 -- 6. Verify the physical map points to the NEW arraylist CTID
@@ -1705,15 +1629,7 @@ ORDER BY v_itemptr;
 -- TEST: Supernode Block-Chaining (Maximized 8KB Page Chunks)
 -- =====================================================================
 -- 1. Create a supernode by inserting 200 edges into Vertex 1
-SELECT count(insert_edge(
-  vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
-  vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build(1, 21, 2, 0::smallint,'{"name": "Alice"}'::gtype),
-      vertex_build(2, 21, 2, 0::smallint,'{"name": "Bob"}'::gtype),
-      '{"status": "mass_insert"}'::gtype)
-  )) FROM generate_series(1, 200);
+SELECT count(insert_edge(vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build(1, 21, 2, 0::smallint), vertex_build(2, 21, 2, 0::smallint)), '{"status": "mass_insert"}'::gtype)) FROM generate_series(1, 200);
  count 
 -------
    200
@@ -1752,28 +1668,20 @@ CREATE TEMP TABLE supernode_relabel_ids (role text, v_id int8);
 INSERT INTO supernode_relabel_ids VALUES ('SuperA', nextval('np_vertex_id_seq_21_2'));
 INSERT INTO supernode_relabel_ids VALUES ('TargetB', nextval('np_vertex_id_seq_21_2'));
 -- 2. Create the vertices
-SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype));
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), '{"name": "SuperRelabelA"}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
-SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype));
+SELECT insert_vertex(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint), '{"name": "TargetRelabelB"}'::gtype);
  insert_vertex 
 ---------------
  
 (1 row)
 
 -- 3. Insert 200 edges to force block-chaining!
-SELECT count(insert_edge(
-  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
-  vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
-  edge_build(
-      nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, 
-      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint, '{"name": "SuperRelabelA"}'::gtype),
-      vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint, '{"name": "TargetRelabelB"}'::gtype),
-      '{"test": "supernode_relabel"}'::gtype)
-)) FROM generate_series(1, 200);
+SELECT count(insert_edge(vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint), edge_build(nextval('np_edge_id_seq_21_1'), 21, 1, 0::smallint, vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'SuperA'), 21, 2, 0::smallint), vertex_build((SELECT v_id FROM supernode_relabel_ids WHERE role = 'TargetB'), 21, 2, 0::smallint)), '{"test": "supernode_relabel"}'::gtype)) FROM generate_series(1, 200);
  count 
 -------
    200

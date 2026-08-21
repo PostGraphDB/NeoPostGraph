@@ -35,7 +35,7 @@ BEGIN
     EXECUTE format('SELECT id FROM np_vertex_label_%s WHERE ltree = ''_.entity''', g_id) INTO l_id;
     
     EXECUTE format(
-        'SELECT insert_vertex(vertex_build(1::int8, %s::int4, %s::int4, 0::smallint, ''{"id": 1, "label": "entity", "properties": {}}''::gtype))', 
+        'SELECT insert_vertex(vertex_build(1::int8, %s::int4, %s::int4, 0::smallint), ''{}''::gtype)',
         g_id, l_id
     );
 END $$;

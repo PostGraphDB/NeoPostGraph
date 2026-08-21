@@ -45,9 +45,7 @@ Datum edge_in(PG_FUNCTION_ARGS) {
         ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
             errmsg("invalid format for properties, expects object"));
 
-    gtype *gt = gtype_value_to_gtype(val);
-
-    edge *e = palloc(sizeof(edge) + VARSIZE(gt));
+    edge *e = palloc0(sizeof(edge));
     e->id = 0;
     e->dictionary_id = 0;
     e->label_id = 0;
@@ -57,21 +55,17 @@ Datum edge_in(PG_FUNCTION_ARGS) {
     e->start_label = 0;
     e->end_id = 0;
     e->end_label = 0;
-
-    memcpy(&e->props, &gt->root, VARSIZE(gt));
-
-    SET_VARSIZE(e, VARSIZE(gt) + VARHDRSZ + (3 * sizeof(uint64)) + (6 * sizeof(uint32)) + sizeof(uint16));
+    SET_VARSIZE(e, sizeof(edge));
 
     NP_RETURN_EDGE(e);
 }
 
 PG_FUNCTION_INFO_V1(edge_build);
 Datum edge_build(PG_FUNCTION_ARGS) {
-    gtype *gt = NP_GET_ARG_GTYPE_P(6);
     vertex *start_vertex = NP_GET_ARG_VERTEX(4);
     vertex *end_vertex = NP_GET_ARG_VERTEX(5);
 
-    edge *e = palloc(sizeof(edge) + VARSIZE(gt));
+    edge *e = palloc0(sizeof(edge));
 
     e->id = PG_GETARG_INT64(0);
     e->graph_id = PG_GETARG_INT32(1);
@@ -82,10 +76,7 @@ Datum edge_build(PG_FUNCTION_ARGS) {
     e->start_label = start_vertex->label_id;
     e->end_id = end_vertex->id;
     e->end_label = end_vertex->label_id;
-
-    memcpy(&e->props, &gt->root, VARSIZE(gt));
-
-    SET_VARSIZE(e, VARSIZE(gt) + VARHDRSZ + (3 * sizeof(uint64)) + (6 * sizeof(uint32)) + sizeof(uint16));
+    SET_VARSIZE(e, sizeof(edge));
 
     NP_RETURN_EDGE(e);
 }
@@ -277,7 +268,8 @@ Datum edge_out(PG_FUNCTION_ARGS) {
 
     // properties
     appendStringInfoString(buffer, "\", \"properties\": ");
-    gtype_to_cstring(buffer, &e->props, 0);
+    gtype *props = np_fetch_edge_properties(e);
+    gtype_to_cstring(buffer, &props->root, 0);
     appendStringInfoString(buffer, "}");
 
     PG_RETURN_CSTRING(buffer->data);

@@ -37,7 +37,6 @@ typedef struct {
     int64 start_id;
     int32 end_id;
     int64 end_label;
-    gtype_container props;
 } edge;
 
 #define EDGEOID \

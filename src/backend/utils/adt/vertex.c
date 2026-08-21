@@ -66,34 +66,25 @@ Datum vertex_in(PG_FUNCTION_ARGS) {
         ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
             errmsg("invalid format for properties, expects object"));
 
-    gtype *gt = gtype_value_to_gtype(val);
-
-    vertex *v = palloc(sizeof(vertex) + VARSIZE(gt));
+    vertex *v = palloc0(sizeof(vertex));
     v->id = 0;
     v->dictionary_id = 0;
     v->label_id = 0;
     v->graph_id = 0;
-
-    memcpy(&v->props, &gt->root, VARSIZE(gt));
-
-    SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+    SET_VARSIZE(v, sizeof(vertex));
 
     NP_RETURN_VERTEX(v);
 }
 vertex *
-build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary_id, gtype *gt)
+build_vertex_internal(int64 id, int32 graph_id, int32 label_id, int16 dictionary_id)
 {
-    vertex *v = (vertex *) palloc(sizeof(vertex) + VARSIZE(gt));
+    vertex *v = (vertex *) palloc0(sizeof(vertex));
 
     v->id = id;
     v->graph_id = graph_id;
     v->label_id = label_id;
     v->dictionary_id = dictionary_id;
-
-    memcpy(&v->props, &gt->root, VARSIZE(gt));
-
-    //SET_VARSIZE(v, VARSIZE(gt) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
-    SET_VARSIZE(v, VARSIZE(gt) + offsetof(vertex, props));
+    SET_VARSIZE(v, sizeof(vertex));
     
     return v;
 }
@@ -105,9 +96,8 @@ Datum vertex_build(PG_FUNCTION_ARGS) {
     int32 graph_id = PG_GETARG_INT32(1);
     int32 label_id = PG_GETARG_INT32(2);
     int16 dictionary_id = PG_GETARG_INT16(3);
-    gtype *gt = NP_GET_ARG_GTYPE_P(4);
 
-    vertex *v = build_vertex_internal(id, graph_id, label_id, dictionary_id, gt);
+    vertex *v = build_vertex_internal(id, graph_id, label_id, dictionary_id);
 
     NP_RETURN_VERTEX(v);
 }
@@ -283,6 +273,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
     
     // properties
     appendStringInfoString(buffer, "\", \"properties\": ");
+    gtype *props = np_fetch_vertex_properties(v);
 
     if (v->dictionary_id != 0 && show_dictionary_keys) {
         appendStringInfoString(buffer, "{");
@@ -290,7 +281,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
         const vertex_dictionary_cache_data *dictionary_cache =
             search_vertex_dictionary_cache(v->graph_id, v->label_id, v->dictionary_id);
 
-        gtype_iterator *it = gtype_iterator_init(&v->props);
+        gtype_iterator *it = gtype_iterator_init(&props->root);
         gtype_iterator *dict_it = gtype_iterator_init(&dictionary_cache->dict->array);
         gtype_value gtv;
         gtype_value dict_gtv;
@@ -342,7 +333,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
         }
         appendStringInfoString(buffer, "}");
     } else {
-        gtype_to_cstring(buffer, &v->props, 0);
+        gtype_to_cstring(buffer, &props->root, 0);
     }
     appendStringInfoString(buffer, "}");
 
@@ -363,7 +354,8 @@ Datum vertex_set_dictionary(PG_FUNCTION_ARGS) {
         ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
             errmsg("Cannot Set Vertex to have a dictionary if it already has a dictionary"));
 
-    gtype_iterator *it = gtype_iterator_init(&v->props);
+    gtype *props = np_fetch_vertex_properties(v);
+    gtype_iterator *it = gtype_iterator_init(&props->root);
     gtype_iterator *dict_it = gtype_iterator_init(&dictionary_cache->dict->array);
     gtype_value gtv;
     gtype_value dict_gtv;
@@ -406,7 +398,7 @@ next_key:
 
 
     if (extra_props) {
-        it = gtype_iterator_init(&v->props);
+        it = gtype_iterator_init(&props->root);
         dict_it = gtype_iterator_init(&dictionary_cache->dict->array);
         gtoken = gtype_iterator_next(&it, &gtv, true);
         array_gtoken = gtype_iterator_next(&dict_it, &dict_gtv, true);
@@ -445,18 +437,8 @@ next_key_extra:
     }
 
     result.res = push_gtype_value(&result.parse_state, WGT_END_ARRAY, NULL);
-    gtype *props = gtype_value_to_gtype(result.res);
 
-    vertex *return_v = palloc(sizeof(vertex) + VARSIZE(props));
-
-    return_v->id = v->id;
-    return_v->graph_id = v->graph_id;
-    return_v->label_id = v->label_id;
-    return_v->dictionary_id = dictionary_id;
-
-    memcpy(&return_v->props, &props->root, VARSIZE(props));
-
-    SET_VARSIZE(return_v, VARSIZE(props) + VARHDRSZ + sizeof(uint64) + (3 * sizeof(uint32)) + sizeof(uint16));
+    vertex *return_v = build_vertex_internal(v->id, v->graph_id, v->label_id, dictionary_id);
 
     NP_RETURN_VERTEX(return_v);
 }

@@ -35,6 +35,7 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
+#include "utils/syscache.h"
 
 #include "ltree.h"
 
@@ -245,10 +246,13 @@ Oid create_vertex_tables(int graph_id, int label_id, Oid namespace) {
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *vertex = makeColumnDef("vertex", VERTEXOID, -1, InvalidOid);
     vertex->constraints = list_make1(build_not_null_constraint());
+    Oid gtype_oid = GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("gtype"), ObjectIdGetDatum(np_namespace_id()));
+    ColumnDef *properties = makeColumnDef("properties", gtype_oid, -1, InvalidOid);
+    properties->constraints = list_make1(build_not_null_constraint());
 
     return execute_internal_create_table(get_namespace_name(namespace),
                                          psprintf("np_vertex_%d_%d", graph_id, label_id),
-                                         list_make2(id, vertex), "entity_store");
+                                         list_make3(id, vertex, properties), "entity_store");
 }
 
 Oid create_edge_tables(int graph_id, int label_id, Oid namespace) {
@@ -256,10 +260,13 @@ Oid create_edge_tables(int graph_id, int label_id, Oid namespace) {
     id->constraints = list_make1(build_not_null_constraint());
     ColumnDef *edge = makeColumnDef("edge", EDGEOID, -1, InvalidOid);
     edge->constraints = list_make1(build_not_null_constraint());
+    Oid gtype_oid = GetSysCacheOid2(TYPENAMENSP, Anum_pg_type_oid, CStringGetDatum("gtype"), ObjectIdGetDatum(np_namespace_id()));
+    ColumnDef *properties = makeColumnDef("properties", gtype_oid, -1, InvalidOid);
+    properties->constraints = list_make1(build_not_null_constraint());
 
     return execute_internal_create_table(get_namespace_name(namespace),
                                          psprintf("np_edge_%d_%d", graph_id, label_id),
-                                         list_make2(id, edge), "entity_store");
+                                         list_make3(id, edge, properties), "entity_store");
 }
 
 Oid create_label_sequence(char *seq_name, char *namespace) {

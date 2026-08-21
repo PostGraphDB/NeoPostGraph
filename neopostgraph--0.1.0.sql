@@ -191,7 +191,7 @@ AS 'MODULE_PATHNAME';
 --
 -- DML Commands
 --
-CREATE FUNCTION vertex_build(int8, int, int, smallint, gtype)
+CREATE FUNCTION vertex_build(int8, int, int, smallint)
 RETURNS vertex
 LANGUAGE C
 IMMUTABLE
@@ -199,7 +199,7 @@ RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
-CREATE FUNCTION insert_vertex(vertex, annotations text[] Default NULL)
+CREATE FUNCTION insert_vertex(vertex, properties gtype DEFAULT '{}'::gtype, annotations text[] Default NULL)
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
@@ -326,7 +326,7 @@ LANGUAGE C STABLE;
 --
 -- DML Commands
 --
-CREATE FUNCTION edge_build(int8, int, int, smallint, vertex, vertex, gtype)
+CREATE FUNCTION edge_build(int8, int, int, smallint, vertex, vertex)
 RETURNS edge
 LANGUAGE C
 IMMUTABLE
@@ -334,7 +334,7 @@ RETURNS NULL ON NULL INPUT
 PARALLEL SAFE
 AS 'MODULE_PATHNAME';
 
-CREATE FUNCTION insert_edge(vertex, vertex, edge)
+CREATE FUNCTION insert_edge(vertex, vertex, edge, properties gtype DEFAULT '{}'::gtype)
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';

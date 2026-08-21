@@ -52,4 +52,17 @@ typedef NPEntityScanDescData *NPEntityScanDesc;
 
 #define SizeOfNPEntityTupleHeader offsetof(NPEntityTupleHeaderData, serialized_entity)
 
+#include "utils/gtype.h"
+#include "utils/vertex.h"
+#include "utils/edge.h"
+
+Size np_entity_pack_size(struct varlena *meta, struct varlena *props);
+void np_entity_pack(char *dest, struct varlena *meta, struct varlena *props);
+struct varlena *np_entity_get_meta(NPEntityTupleHeader hdr);
+struct varlena *np_entity_get_props(NPEntityTupleHeader hdr);
+gtype *np_entity_copy_props(NPEntityTupleHeader hdr);
+gtype *np_empty_gtype_object(void);
+gtype *np_fetch_vertex_properties(vertex *v);
+gtype *np_fetch_edge_properties(edge *e);
+
 #endif /* NP_ENTITY_STORE_H */

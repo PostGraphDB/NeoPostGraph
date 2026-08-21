@@ -45,7 +45,7 @@ BEGIN
     EXECUTE format('SELECT id FROM np_vertex_label_%s WHERE ltree = ''_.entity''', g_id) INTO l_id;
     
     EXECUTE format(
-        'SELECT insert_vertex(vertex_build(1::int8, %s::int4, %s::int4, 0::smallint, ''{"id": 1, "label": "entity", "properties": {}}''::gtype))', 
+        'SELECT insert_vertex(vertex_build(1::int8, %s::int4, %s::int4, 0::smallint), ''{}''::gtype)',
         g_id, l_id
     );
 END $$;
@@ -113,4 +113,4 @@ BEGIN
     EXECUTE format('SELECT vertex FROM np_vertex_%s_%s WHERE id = 1', g_id, l_id) INTO v_json;
     RAISE NOTICE 'Vertex after DML rollback: %', v_json;
 END $$;
-NOTICE:  Vertex after DML rollback: {"id": 1, "label": "entity:GhostTag:RealTag", "properties": {"id": 1, "label": "entity", "properties": {}}}
+NOTICE:  Vertex after DML rollback: {"id": 1, "label": "entity:GhostTag:RealTag", "properties": {}}

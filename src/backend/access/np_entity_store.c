@@ -24,6 +24,7 @@
 
 #include "access/tableam.h"
 #include "access/heapam.h"
+#include "access/table.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/xact.h"
@@ -43,6 +44,8 @@
 #include "access/np_entity_store.h"
 
 #include "access/np_phys_map.h"
+#include "utils/np_cache.h"
+#include "utils/gtype.h"
 struct ReadStream;
 
 static const TupleTableSlotOps *
@@ -170,8 +173,18 @@ np_entity_store_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, T
                     slot->tts_values[0] = Int64GetDatum(hdr->id);
                     slot->tts_isnull[0] = false;
 
-                    slot->tts_values[1] = PointerGetDatum(hdr->serialized_entity);
-                    slot->tts_isnull[1] = false;
+                    if (slot->tts_tupleDescriptor->natts >= 3)
+                    {
+                        slot->tts_values[1] = PointerGetDatum(np_entity_get_meta(hdr));
+                        slot->tts_isnull[1] = false;
+                        slot->tts_values[2] = PointerGetDatum(np_entity_get_props(hdr));
+                        slot->tts_isnull[2] = false;
+                    }
+                    else
+                    {
+                        slot->tts_values[1] = PointerGetDatum(hdr->serialized_entity);
+                        slot->tts_isnull[1] = false;
+                    }
 
                     ExecStoreVirtualTuple(slot);
                     ItemPointerSet(&slot->tts_tid, scan->rs_cblock, current_offset);
@@ -389,13 +402,19 @@ np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slo
 
     bool isnull;
     uint64 new_id = DatumGetInt64(slot_getattr(slot, 1, &isnull));
-    struct varlena *new_vertex = (struct varlena *) DatumGetPointer(slot_getattr(slot, 2, &isnull));
+    struct varlena *new_meta = (struct varlena *) DatumGetPointer(slot_getattr(slot, 2, &isnull));
+    struct varlena *new_props = NULL;
+    Size payload_size;
+    char *tuple_buf;
+    NPEntityTupleHeader new_hdr;
 
-    Size payload_size = VARSIZE(new_vertex);
+    if (slot->tts_tupleDescriptor->natts >= 3)
+        new_props = (struct varlena *) DatumGetPointer(slot_getattr(slot, 3, &isnull));
+
+    payload_size = new_props ? np_entity_pack_size(new_meta, new_props) : VARSIZE(new_meta);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
-
-    char *tuple_buf = (char *) palloc0(total_tuple_size);
-    NPEntityTupleHeader new_hdr = (NPEntityTupleHeader) tuple_buf;
+    tuple_buf = (char *) palloc0(total_tuple_size);
+    new_hdr = (NPEntityTupleHeader) tuple_buf;
 
     new_hdr->xmin = current_fxid;
     new_hdr->xmax = InvalidFullTransactionId;
@@ -406,7 +425,10 @@ np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slo
     
     new_hdr->flags = 0;
     new_hdr->id = new_id;
-    memcpy(new_hdr->serialized_entity, new_vertex, payload_size);
+    if (new_props)
+        np_entity_pack(new_hdr->serialized_entity, new_meta, new_props);
+    else
+        memcpy(new_hdr->serialized_entity, new_meta, payload_size);
 
     /* 5. Mark the OLD tuple as deleted (using WAL to be crash-safe) */
     GenericXLogState *state = GenericXLogStart(rel);
@@ -542,4 +564,164 @@ Datum
 np_entity_store_handler(PG_FUNCTION_ARGS)
 {
     PG_RETURN_POINTER(&np_entity_store_methods);
+}
+
+Size
+np_entity_pack_size(struct varlena *meta, struct varlena *props)
+{
+    return MAXALIGN(VARSIZE(meta)) + VARSIZE(props);
+}
+
+void
+np_entity_pack(char *dest, struct varlena *meta, struct varlena *props)
+{
+    Size msz = VARSIZE(meta);
+
+    memcpy(dest, meta, msz);
+    memcpy(dest + MAXALIGN(msz), props, VARSIZE(props));
+}
+
+struct varlena *
+np_entity_get_meta(NPEntityTupleHeader hdr)
+{
+    return (struct varlena *) hdr->serialized_entity;
+}
+
+struct varlena *
+np_entity_get_props(NPEntityTupleHeader hdr)
+{
+    struct varlena *meta = np_entity_get_meta(hdr);
+
+    return (struct varlena *) ((char *) meta + MAXALIGN(VARSIZE(meta)));
+}
+
+gtype *
+np_entity_copy_props(NPEntityTupleHeader hdr)
+{
+    return (gtype *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_props(hdr)));
+}
+
+gtype *
+np_empty_gtype_object(void)
+{
+    gtype_value *val = gtype_value_from_cstring("{}", 2);
+
+    return gtype_value_to_gtype(val);
+}
+
+gtype *
+np_fetch_vertex_properties(vertex *v)
+{
+    const label_cache_data *cache;
+    Relation pmap_rel;
+    Relation v_rel;
+    Buffer pmap_buf;
+    Buffer v_buf;
+    Page pmap_page;
+    ItemId pmap_lp;
+    NeoPhysMapRecord *pmap_rec;
+    ItemPointerData phys_map_tid;
+    ItemPointerData v_tid;
+    NPEntityTupleHeader hdr;
+    gtype *props;
+    uint32 pmap_tuples_per_page;
+
+    if (v->graph_id == 0 || v->label_id == 0)
+        return np_empty_gtype_object();
+
+    cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
+    if (!cache || !OidIsValid(cache->phys_map) || !OidIsValid(cache->vertex_tbl))
+        return np_empty_gtype_object();
+
+    pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+    np_id_to_tid(v->id, pmap_tuples_per_page, &phys_map_tid);
+
+    pmap_rel = table_open(cache->phys_map, AccessShareLock);
+    if (ItemPointerGetBlockNumber(&phys_map_tid) >= RelationGetNumberOfBlocks(pmap_rel))
+    {
+        table_close(pmap_rel, AccessShareLock);
+        return np_empty_gtype_object();
+    }
+
+    pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    pmap_page = BufferGetPage(pmap_buf);
+    pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&phys_map_tid));
+    if (!ItemIdIsNormal(pmap_lp))
+    {
+        UnlockReleaseBuffer(pmap_buf);
+        table_close(pmap_rel, AccessShareLock);
+        return np_empty_gtype_object();
+    }
+    pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+    v_tid = pmap_rec->v_itemptr;
+    UnlockReleaseBuffer(pmap_buf);
+    table_close(pmap_rel, AccessShareLock);
+
+    if (!ItemPointerIsValid(&v_tid))
+        return np_empty_gtype_object();
+
+    v_rel = table_open(cache->vertex_tbl, AccessShareLock);
+    v_buf = ReadBuffer(v_rel, ItemPointerGetBlockNumber(&v_tid));
+    LockBuffer(v_buf, BUFFER_LOCK_SHARE);
+    hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(v_buf),
+            PageGetItemId(BufferGetPage(v_buf), ItemPointerGetOffsetNumber(&v_tid)));
+    props = np_entity_copy_props(hdr);
+    UnlockReleaseBuffer(v_buf);
+    table_close(v_rel, AccessShareLock);
+    return props;
+}
+
+gtype *
+np_fetch_edge_properties(edge *e)
+{
+    const label_cache_data *cache;
+    Relation pmap_rel;
+    Relation e_rel;
+    Buffer pmap_buf;
+    Buffer e_buf;
+    ItemPointerData phys_map_tid;
+    ItemPointerData e_tid;
+    NeoEdgePhysMapRecord *pmap_rec;
+    NPEntityTupleHeader hdr;
+    gtype *props;
+    uint32 pmap_tuples_per_page;
+
+    if (e->graph_id == 0 || e->label_id == 0)
+        return np_empty_gtype_object();
+
+    cache = search_edge_label_graph_id_label_id_cache(e->graph_id, e->label_id);
+    if (!cache || !OidIsValid(cache->phys_map) || !OidIsValid(cache->vertex_tbl))
+        return np_empty_gtype_object();
+
+    pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoEdgePhysMapRecord) + sizeof(ItemIdData));
+    np_id_to_tid(e->id, pmap_tuples_per_page, &phys_map_tid);
+
+    pmap_rel = table_open(cache->phys_map, AccessShareLock);
+    if (ItemPointerGetBlockNumber(&phys_map_tid) >= RelationGetNumberOfBlocks(pmap_rel))
+    {
+        table_close(pmap_rel, AccessShareLock);
+        return np_empty_gtype_object();
+    }
+
+    pmap_buf = ReadBuffer(pmap_rel, ItemPointerGetBlockNumber(&phys_map_tid));
+    LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+    pmap_rec = (NeoEdgePhysMapRecord *) PageGetItem(BufferGetPage(pmap_buf),
+            PageGetItemId(BufferGetPage(pmap_buf), ItemPointerGetOffsetNumber(&phys_map_tid)));
+    e_tid = pmap_rec->e_itemptr;
+    UnlockReleaseBuffer(pmap_buf);
+    table_close(pmap_rel, AccessShareLock);
+
+    if (!ItemPointerIsValid(&e_tid))
+        return np_empty_gtype_object();
+
+    e_rel = table_open(cache->vertex_tbl, AccessShareLock);
+    e_buf = ReadBuffer(e_rel, ItemPointerGetBlockNumber(&e_tid));
+    LockBuffer(e_buf, BUFFER_LOCK_SHARE);
+    hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(e_buf),
+            PageGetItemId(BufferGetPage(e_buf), ItemPointerGetOffsetNumber(&e_tid)));
+    props = np_entity_copy_props(hdr);
+    UnlockReleaseBuffer(e_buf);
+    table_close(e_rel, AccessShareLock);
+    return props;
 }

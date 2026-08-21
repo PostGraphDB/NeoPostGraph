@@ -55,9 +55,10 @@ Datum
 insert_vertex(PG_FUNCTION_ARGS)
 {
     vertex *v = NP_GET_ARG_VERTEX(0);
-    ArrayType *input_annots = PG_ARGISNULL(1) ? NULL : PG_GETARG_ARRAYTYPE_P(1);
+    gtype *props = PG_ARGISNULL(1) ? np_empty_gtype_object() : NP_GET_ARG_GTYPE_P(1);
+    ArrayType *input_annots = PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2);
 
-    np_internal_insert_vertex(v, input_annots, NULL);
+    np_internal_insert_vertex(v, props, input_annots, NULL);
 
     PG_RETURN_VOID();
 }
@@ -70,30 +71,36 @@ insert_edge(PG_FUNCTION_ARGS)
     vertex *start_v = NP_GET_ARG_VERTEX(0);
     vertex *end_v = NP_GET_ARG_VERTEX(1);
     edge *e = NP_GET_ARG_EDGE(2);
+    gtype *props = PG_ARGISNULL(3) ? np_empty_gtype_object() : NP_GET_ARG_GTYPE_P(3);
 
     /* 2. Call internal routing */
-    np_internal_insert_edge(start_v, end_v, e);
+    np_internal_insert_edge(start_v, end_v, e, props);
 
     PG_RETURN_VOID();
 }
 
 void
-np_internal_insert_vertex(vertex *v, ArrayType *input_annots, ItemPointerData *forwarded_a_itemptr)
+np_internal_insert_vertex(vertex *v, gtype *props, ArrayType *input_annots, ItemPointerData *forwarded_a_itemptr)
 {
     CommandId cid = GetCurrentCommandId(true);
     FullTransactionId current_fxid = GetTopFullTransactionId();
 
-    const label_cache_data *label_cache = search_vertex_label_graph_id_label_id_cache(v->graph_id, v->label_id);
+    int32 graph_id = v->graph_id;
+    int32 label_id = v->label_id;
+    const label_cache_data *label_cache = search_vertex_label_graph_id_label_id_cache(graph_id, label_id);
 
     if (!label_cache)
         ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                 errmsg("label not found: graph_id=%d, label_id=%d", v->graph_id, v->label_id)));
+                 errmsg("label not found: graph_id=%d, label_id=%d", graph_id, label_id)));
 
     /* 1. Open the custom entity_store table */
     Relation rel = table_open(label_cache->vertex_tbl, RowExclusiveLock);
 
+    if (props == NULL)
+        props = np_empty_gtype_object();
+
     /* 2. Calculate explicit byte size. */
-    Size payload_size = VARSIZE(v);
+    Size payload_size = np_entity_pack_size((struct varlena *) v, (struct varlena *) props);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
     
     /* 3. Allocate and format the custom physical tuple */
@@ -108,8 +115,7 @@ np_internal_insert_vertex(vertex *v, ArrayType *input_annots, ItemPointerData *f
     hdr->flags = 0;
     hdr->id = v->id;
 
-    /* Drop the serialized vertex payload directly behind the 40-byte header */
-    memcpy(hdr->serialized_entity, v, payload_size);
+    np_entity_pack(hdr->serialized_entity, (struct varlena *) v, (struct varlena *) props);
 
     /* 4. Write directly to the page using your existing primitive */
     ItemPointerData v_itemptr;
@@ -259,7 +265,7 @@ np_internal_insert_vertex(vertex *v, ArrayType *input_annots, ItemPointerData *f
 }
 
 void
-np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e)
+np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e, gtype *props)
 {
     CommandId cid = GetCurrentCommandId(true);
     FullTransactionId current_fxid = GetTopFullTransactionId();
@@ -273,8 +279,11 @@ np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e)
     /* 1. Open the custom entity_store edge table */
     Relation edge_rel = table_open(edge_label->vertex_tbl, RowExclusiveLock);
 
+    if (props == NULL)
+        props = np_empty_gtype_object();
+
     /* 2. Calculate explicit byte size. */
-    Size payload_size = VARSIZE(e);
+    Size payload_size = np_entity_pack_size((struct varlena *) e, (struct varlena *) props);
     Size total_tuple_size = MAXALIGN(SizeOfNPEntityTupleHeader + payload_size);
 
     /* 3. Allocate and format the custom physical tuple */
@@ -289,8 +298,7 @@ np_internal_insert_edge(vertex *start_v, vertex *end_v, edge *e)
     hdr->flags = 0;
     hdr->id = e->id;
 
-    /* Drop the serialized edge payload directly behind the 40-byte header */
-    memcpy(hdr->serialized_entity, e, payload_size);
+    np_entity_pack(hdr->serialized_entity, (struct varlena *) e, (struct varlena *) props);
 
     /* 4. Write directly to the page using your existing primitive */
     ItemPointerData edge_tid;
