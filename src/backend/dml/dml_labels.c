@@ -281,6 +281,14 @@ np_internal_fetch_vertex(int32 graph_id, int64 v_id, int32 v_label)
     Buffer v_buf = ReadBuffer(v_rel, ItemPointerGetBlockNumber(&v_tid));
     LockBuffer(v_buf, BUFFER_LOCK_SHARE);
     NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(v_buf), PageGetItemId(BufferGetPage(v_buf), ItemPointerGetOffsetNumber(&v_tid)));
+
+    if (!np_entity_tuple_is_live(hdr))
+    {
+        UnlockReleaseBuffer(v_buf);
+        table_close(v_rel, AccessShareLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("vertex id %ld is not live", v_id)));
+    }
     
     vertex *v = (vertex *)PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(hdr)));
     
@@ -309,6 +317,14 @@ np_internal_fetch_edge(int32 graph_id, int64 e_id, int32 e_label, gtype **out_pr
     Buffer e_buf = ReadBuffer(e_rel, ItemPointerGetBlockNumber(&e_tid));
     LockBuffer(e_buf, BUFFER_LOCK_SHARE);
     NPEntityTupleHeader hdr = (NPEntityTupleHeader)PageGetItem(BufferGetPage(e_buf), PageGetItemId(BufferGetPage(e_buf), ItemPointerGetOffsetNumber(&e_tid)));
+
+    if (!np_entity_tuple_is_live(hdr))
+    {
+        UnlockReleaseBuffer(e_buf);
+        table_close(e_rel, AccessShareLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+                errmsg("edge id %ld is not live", e_id)));
+    }
     
     edge *e = (edge *)PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(hdr)));
     if (out_props)
@@ -571,6 +587,13 @@ set_vertex_label(PG_FUNCTION_ARGS)
         PageGetItem(BufferGetPage(old_v_buf), 
                     PageGetItemId(BufferGetPage(old_v_buf), ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
 
+    if (!np_entity_tuple_is_live(old_v_hdr) || np_entity_tuple_xmax_other(old_v_hdr)) {
+        UnlockReleaseBuffer(old_v_buf);
+        table_close(old_v_rel, RowExclusiveLock);
+        table_close(old_physmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", old_vid)));
+    }
+
     /* 4. Prepare New Vertex Structs */
     vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
     vertex *new_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
@@ -808,6 +831,13 @@ np_internal_remove_vertex_label(int64 old_vid, int32 current_label_id, int32 gra
     NPEntityTupleHeader old_v_hdr = (NPEntityTupleHeader) 
         PageGetItem(BufferGetPage(old_v_buf), 
                     PageGetItemId(BufferGetPage(old_v_buf), ItemPointerGetOffsetNumber(&pmap_rec.v_itemptr)));
+
+    if (!np_entity_tuple_is_live(old_v_hdr) || np_entity_tuple_xmax_other(old_v_hdr)) {
+        UnlockReleaseBuffer(old_v_buf);
+        table_close(old_v_rel, RowExclusiveLock);
+        table_close(old_physmap_rel, RowExclusiveLock);
+        ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", old_vid)));
+    }
 
     /* 4. Prepare New Vertex Structs */
     vertex *old_unpacked = (vertex *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_v_hdr)));
@@ -1896,6 +1926,13 @@ set_edge_label(PG_FUNCTION_ARGS)
     NPEntityTupleHeader old_e_hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(old_e_buf), 
                                     PageGetItemId(BufferGetPage(old_e_buf), ItemPointerGetOffsetNumber(&pmap_rec.e_itemptr)));
 
+    if (!np_entity_tuple_is_live(old_e_hdr) || np_entity_tuple_xmax_other(old_e_hdr)) {
+        UnlockReleaseBuffer(old_e_buf);
+        table_close(old_e_rel, AccessShareLock);
+        table_close(old_physmap_rel, AccessShareLock);
+        ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
+    }
+
     /* Clone the payload in memory so we can safely mutate its label ID */
     edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_e_hdr)));
     gtype *migrated_e_props = np_entity_copy_props(old_e_hdr);
@@ -2221,6 +2258,13 @@ remove_edge_label(PG_FUNCTION_ARGS)
     
     NPEntityTupleHeader old_e_hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(old_e_buf), 
                                     PageGetItemId(BufferGetPage(old_e_buf), ItemPointerGetOffsetNumber(&pmap_rec.e_itemptr)));
+
+    if (!np_entity_tuple_is_live(old_e_hdr) || np_entity_tuple_xmax_other(old_e_hdr)) {
+        UnlockReleaseBuffer(old_e_buf);
+        table_close(old_e_rel, AccessShareLock);
+        table_close(old_physmap_rel, AccessShareLock);
+        ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
+    }
 
     edge *new_unpacked = (edge *) PG_DETOAST_DATUM_COPY(PointerGetDatum(np_entity_get_meta(old_e_hdr)));
     gtype *migrated_e_props = np_entity_copy_props(old_e_hdr);

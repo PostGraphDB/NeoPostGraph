@@ -1499,7 +1499,7 @@ add_vertex_annotation_label(PG_FUNCTION_ARGS)
             NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
             
             /* Concurrency Check: ensure no one deleted/updated this annotation bitset concurrently */
-            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+            if (!np_entity_tuple_is_live(old_hdr) || np_entity_tuple_xmax_other(old_hdr)) {
                 UnlockReleaseBuffer(obuf_check);
                 table_close(annot_rel, RowExclusiveLock);
                 table_close(pmap_rel, RowExclusiveLock);
@@ -1715,7 +1715,7 @@ remove_vertex_annotation_label(PG_FUNCTION_ARGS)
             NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
             
             /* Concurrency Check: ensure no one deleted/updated this annotation bitset concurrently */
-            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+            if (!np_entity_tuple_is_live(old_hdr) || np_entity_tuple_xmax_other(old_hdr)) {
                 UnlockReleaseBuffer(obuf_check);
                 table_close(annot_rel, RowExclusiveLock);
                 table_close(pmap_rel, RowExclusiveLock);
@@ -2488,7 +2488,7 @@ add_edge_annotation(PG_FUNCTION_ARGS)
         if (ItemIdIsNormal(olp_check)) {
             NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
             
-            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+            if (!np_entity_tuple_is_live(old_hdr) || np_entity_tuple_xmax_other(old_hdr)) {
                 UnlockReleaseBuffer(obuf_check);
                 table_close(annot_rel, RowExclusiveLock);
                 table_close(pmap_rel, RowExclusiveLock);
@@ -2719,7 +2719,7 @@ remove_edge_annotation(PG_FUNCTION_ARGS)
         if (ItemIdIsNormal(olp_check)) {
             NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
             
-            if (FullTransactionIdIsValid(old_hdr->xmax)) {
+            if (!np_entity_tuple_is_live(old_hdr) || np_entity_tuple_xmax_other(old_hdr)) {
                 UnlockReleaseBuffer(obuf_check);
                 table_close(annot_rel, RowExclusiveLock);
                 table_close(pmap_rel, RowExclusiveLock);

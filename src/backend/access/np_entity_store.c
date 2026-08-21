@@ -39,6 +39,7 @@
 #include "utils/rel.h"
 #include "catalog/storage.h"
 #include "access/transam.h"
+#include "storage/procarray.h"
 #include "utils/snapmgr.h"
 
 #include "access/np_entity_store.h"
@@ -166,7 +167,7 @@ np_entity_store_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, T
             {
                 NPEntityTupleHeader hdr = (NPEntityTupleHeader) PageGetItem(page, lp);
 
-                if (!FullTransactionIdIsValid(hdr->xmax)) 
+                if (np_entity_tuple_is_live(hdr))
                 {
                     ExecClearTuple(slot);
 
@@ -395,9 +396,13 @@ np_entity_store_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slo
 
     NPEntityTupleHeader old_hdr = (NPEntityTupleHeader) PageGetItem(opage, olp);
 
-    if (FullTransactionIdIsValid(old_hdr->xmax)) {
+    if (!np_entity_tuple_is_live(old_hdr)) {
         UnlockReleaseBuffer(obuf);
-        return TM_Updated; 
+        return TM_Invisible;
+    }
+    if (np_entity_tuple_xmax_other(old_hdr)) {
+        UnlockReleaseBuffer(obuf);
+        return TM_Updated;
     }
 
     bool isnull;
@@ -566,6 +571,60 @@ np_entity_store_handler(PG_FUNCTION_ARGS)
     PG_RETURN_POINTER(&np_entity_store_methods);
 }
 
+bool
+np_entity_tuple_is_live(NPEntityTupleHeader hdr)
+{
+    FullTransactionId fxmin = hdr->xmin;
+    FullTransactionId fxmax = hdr->xmax;
+    TransactionId xmin;
+    TransactionId xmax;
+
+    if (!FullTransactionIdIsValid(fxmin))
+        return false;
+
+    xmin = XidFromFullTransactionId(fxmin);
+
+    if (TransactionIdIsCurrentTransactionId(xmin))
+    {
+        if (FullTransactionIdIsValid(fxmax) &&
+            TransactionIdIsCurrentTransactionId(XidFromFullTransactionId(fxmax)))
+            return false;
+        return true;
+    }
+
+    if (TransactionIdIsInProgress(xmin) || !TransactionIdDidCommit(xmin))
+        return false;
+
+    if (!FullTransactionIdIsValid(fxmax))
+        return true;
+
+    xmax = XidFromFullTransactionId(fxmax);
+
+    if (TransactionIdIsCurrentTransactionId(xmax))
+        return false;
+
+    if (TransactionIdIsInProgress(xmax) || !TransactionIdDidCommit(xmax))
+        return true;
+
+    return false;
+}
+
+bool
+np_entity_tuple_xmax_other(NPEntityTupleHeader hdr)
+{
+    FullTransactionId fxmax = hdr->xmax;
+    TransactionId xmax;
+
+    if (!FullTransactionIdIsValid(fxmax))
+        return false;
+
+    xmax = XidFromFullTransactionId(fxmax);
+    if (TransactionIdIsCurrentTransactionId(xmax))
+        return false;
+
+    return TransactionIdIsInProgress(xmax);
+}
+
 Size
 np_entity_pack_size(struct varlena *meta, struct varlena *props)
 {
@@ -666,6 +725,12 @@ np_fetch_vertex_properties(vertex *v)
     LockBuffer(v_buf, BUFFER_LOCK_SHARE);
     hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(v_buf),
             PageGetItemId(BufferGetPage(v_buf), ItemPointerGetOffsetNumber(&v_tid)));
+    if (!np_entity_tuple_is_live(hdr))
+    {
+        UnlockReleaseBuffer(v_buf);
+        table_close(v_rel, AccessShareLock);
+        return np_empty_gtype_object();
+    }
     props = np_entity_copy_props(hdr);
     UnlockReleaseBuffer(v_buf);
     table_close(v_rel, AccessShareLock);
@@ -720,6 +785,12 @@ np_fetch_edge_properties(edge *e)
     LockBuffer(e_buf, BUFFER_LOCK_SHARE);
     hdr = (NPEntityTupleHeader) PageGetItem(BufferGetPage(e_buf),
             PageGetItemId(BufferGetPage(e_buf), ItemPointerGetOffsetNumber(&e_tid)));
+    if (!np_entity_tuple_is_live(hdr))
+    {
+        UnlockReleaseBuffer(e_buf);
+        table_close(e_rel, AccessShareLock);
+        return np_empty_gtype_object();
+    }
     props = np_entity_copy_props(hdr);
     UnlockReleaseBuffer(e_buf);
     table_close(e_rel, AccessShareLock);

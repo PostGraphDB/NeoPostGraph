@@ -135,7 +135,7 @@ np_internal_delete_edge(int32 graph_id, int32 label_id, int64 edge_id, CommandId
     NPEntityTupleHeader wal_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, wal_lp);
 
     /* Concurrency Check */
-    if (FullTransactionIdIsValid(wal_hdr->xmax)) {
+    if (!np_entity_tuple_is_live(wal_hdr) || np_entity_tuple_xmax_other(wal_hdr)) {
         GenericXLogAbort(state);
         UnlockReleaseBuffer(obuf);
         table_close(rel, RowExclusiveLock);
@@ -354,7 +354,7 @@ delete_vertex(PG_FUNCTION_ARGS)
 
     NPEntityTupleHeader wal_hdr = (NPEntityTupleHeader) PageGetItem(wal_page, wal_lp);
 
-    if (FullTransactionIdIsValid(wal_hdr->xmax)) {
+    if (!np_entity_tuple_is_live(wal_hdr) || np_entity_tuple_xmax_other(wal_hdr)) {
         GenericXLogAbort(state);
         UnlockReleaseBuffer(obuf);
         table_close(rel, RowExclusiveLock);

@@ -162,7 +162,7 @@ Datum edge_out(PG_FUNCTION_ARGS) {
                         if (ItemIdIsNormal(annot_lp)) {
                             NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) PageGetItem(annot_page, annot_lp);
                             
-                            if (!FullTransactionIdIsValid(annot_hdr->xmax)) {
+                            if (np_entity_tuple_is_live(annot_hdr)) {
                                 uint64 bitset_xmin = U64FromFullTransactionId(annot_hdr->xmin);
                                 CommandId bitset_cmin = annot_hdr->cmin;
 

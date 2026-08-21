@@ -65,4 +65,7 @@ gtype *np_empty_gtype_object(void);
 gtype *np_fetch_vertex_properties(vertex *v);
 gtype *np_fetch_edge_properties(edge *e);
 
+bool np_entity_tuple_is_live(NPEntityTupleHeader hdr);
+bool np_entity_tuple_xmax_other(NPEntityTupleHeader hdr);
+
 #endif /* NP_ENTITY_STORE_H */

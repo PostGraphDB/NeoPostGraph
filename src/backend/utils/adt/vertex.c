@@ -162,7 +162,7 @@ Datum vertex_out(PG_FUNCTION_ARGS) {
                     NPEntityTupleHeader annot_hdr = (NPEntityTupleHeader) PageGetItem(annot_page, annot_lp);
                     
                     /* Make sure the annotation tuple isn't dead/tombstoned */
-                    if (!FullTransactionIdIsValid(annot_hdr->xmax)) {
+                    if (np_entity_tuple_is_live(annot_hdr)) {
                         /* Extract temporal birth timestamps of the bits */
                         uint64 bitset_xmin = U64FromFullTransactionId(annot_hdr->xmin);
                         CommandId bitset_cmin = annot_hdr->cmin;

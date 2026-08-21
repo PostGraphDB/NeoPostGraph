@@ -117,7 +117,7 @@ update_edge(PG_FUNCTION_ARGS)
     }
 
     NPEntityTupleHeader old_hdr_check = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
-    if (FullTransactionIdIsValid(old_hdr_check->xmax)) {
+    if (!np_entity_tuple_is_live(old_hdr_check) || np_entity_tuple_xmax_other(old_hdr_check)) {
         UnlockReleaseBuffer(obuf_check);
         ereport(ERROR, (errmsg("Edge ID %ld was concurrently deleted or updated", edge_id)));
     }
@@ -249,7 +249,7 @@ update_vertex(PG_FUNCTION_ARGS)
     }
 
     NPEntityTupleHeader old_hdr_check = (NPEntityTupleHeader) PageGetItem(opage_check, olp_check);
-    if (FullTransactionIdIsValid(old_hdr_check->xmax)) {
+    if (!np_entity_tuple_is_live(old_hdr_check) || np_entity_tuple_xmax_other(old_hdr_check)) {
         UnlockReleaseBuffer(obuf_check);
         ereport(ERROR, (errmsg("Vertex ID %ld was concurrently deleted or updated", id)));
     }
