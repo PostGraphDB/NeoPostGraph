@@ -341,3 +341,101 @@ alter_graph(PG_FUNCTION_ARGS)
                             graph_name, get_namespace_name(old_nsp), get_namespace_name(new_nsp), moved_count)));
     PG_RETURN_VOID();
 }
+
+PG_FUNCTION_INFO_V1(rename_graph);
+Datum
+rename_graph(PG_FUNCTION_ARGS)
+{
+    char *graph_name;
+    char *new_name;
+    Oid nsp;
+    const graph_cache_data *graph;
+    Relation np_graph;
+    ScanKeyData skey[2];
+    SysScanDesc scan;
+    HeapTuple old_tup;
+    HeapTuple new_tup;
+    Datum values[9];
+    bool nulls[9];
+    bool replace[9];
+    NameData name_data;
+    NameData new_name_data;
+
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("graph name must not be NULL")));
+    if (PG_ARGISNULL(1))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("new graph name must not be NULL")));
+
+    graph_name = NameStr(*PG_GETARG_NAME(0));
+    new_name = NameStr(*PG_GETARG_NAME(1));
+
+    if (PG_ARGISNULL(2))
+    {
+        List *search_path = fetch_search_path(false);
+        if (list_length(search_path) < 1)
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("rename_graph requires a search path when namespace is not specified")));
+        nsp = linitial_oid(search_path);
+    }
+    else
+    {
+        char *nsp_str = TextDatumGetCString(PG_GETARG_DATUM(2));
+        nsp = get_namespace_oid(nsp_str, true);
+        if (!OidIsValid(nsp))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("namespace \"%s\" does not exist", nsp_str)));
+    }
+
+    graph = search_graph_name_namespace_cache(graph_name, nsp);
+    if (!graph)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" does not exist in the namespace \"%s\"",
+                               graph_name, get_namespace_name(nsp))));
+
+    if (namestrcmp(PG_GETARG_NAME(0), new_name) == 0)
+    {
+        ereport(NOTICE, (errmsg("graph \"%s\" is already named \"%s\"",
+                                graph_name, new_name)));
+        PG_RETURN_VOID();
+    }
+
+    if (search_graph_name_namespace_cache(new_name, nsp))
+        ereport(ERROR, (errcode(ERRCODE_DUPLICATE_SCHEMA),
+                        errmsg("graph \"%s\" already exists in the namespace \"%s\"",
+                               new_name, get_namespace_name(nsp))));
+
+    np_graph = table_open(np_graph_relation_id(), RowExclusiveLock);
+    namestrcpy(&name_data, graph_name);
+    ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_data));
+    ScanKeyInit(&skey[1], 3, BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(nsp));
+    scan = systable_beginscan(np_graph, np_graph_name_namespace_index_id(), true, NULL, 2, skey);
+    old_tup = systable_getnext(scan);
+    if (!HeapTupleIsValid(old_tup))
+    {
+        systable_endscan(scan);
+        table_close(np_graph, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" catalog row not found", graph_name)));
+    }
+
+    memset(values, 0, sizeof(values));
+    memset(nulls, false, sizeof(nulls));
+    memset(replace, false, sizeof(replace));
+    namestrcpy(&new_name_data, new_name);
+    values[1] = NameGetDatum(&new_name_data);
+    replace[1] = true;
+    new_tup = heap_modify_tuple(old_tup, RelationGetDescr(np_graph), values, nulls, replace);
+    CatalogTupleUpdate(np_graph, &old_tup->t_self, new_tup);
+    heap_freetuple(new_tup);
+    systable_endscan(scan);
+    table_close(np_graph, RowExclusiveLock);
+    CommandCounterIncrement();
+
+    invalidate_graph_name_namespace_cache_entry(graph_name, nsp);
+
+    ereport(NOTICE, (errmsg("graph \"%s\" has been renamed to \"%s\"",
+                            graph_name, new_name)));
+    PG_RETURN_VOID();
+}

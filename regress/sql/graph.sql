@@ -151,6 +151,31 @@ SELECT NeoPostGraph.alter_graph('alter_dup', 'other_schema', 'public');
 SELECT NeoPostGraph.alter_graph('no_such_graph', 'other_schema', 'public');
 
 ---
+--- rename_graph: catalog name change; relations stay keyed by graph id
+---
+SELECT NeoPostGraph.create_graph('rename_me', 'public');
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'rename_me';
+
+SELECT NeoPostGraph.rename_graph('rename_me', 'renamed_graph', 'public');
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'renamed_graph';
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'rename_me';
+
+SELECT n.nspname, c.relname
+FROM NeoPostGraph.np_graph g
+JOIN pg_class c ON c.oid = g.vertex_id_seq
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE g.name = 'renamed_graph';
+
+-- already that name
+SELECT NeoPostGraph.rename_graph('renamed_graph', 'renamed_graph', 'public');
+
+-- name collision in the same namespace
+SELECT NeoPostGraph.rename_graph('renamed_graph', 'conflict_test', 'public');
+
+-- missing graph
+SELECT NeoPostGraph.rename_graph('no_such_graph', 'whatever', 'public');
+
+---
 --- Verification
 ---
 SELECT * FROM NeoPostGraph.np_graph;

@@ -315,6 +315,70 @@ SELECT NeoPostGraph.alter_graph('no_such_graph', 'other_schema', 'public');
 ERROR:  graph "no_such_graph" does not exist in the namespace "public"
 
 ---
+--- rename_graph: catalog name change; relations stay keyed by graph id
+---
+SELECT NeoPostGraph.create_graph('rename_me', 'public');
+NOTICE:  graph "rename_me" has been created
+ create_graph 
+--------------
+ 
+(1 row)
+
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'rename_me';
+   name    | namespace 
+-----------+-----------
+ rename_me | public
+(1 row)
+
+
+SELECT NeoPostGraph.rename_graph('rename_me', 'renamed_graph', 'public');
+NOTICE:  graph "rename_me" has been renamed to "renamed_graph"
+ rename_graph 
+--------------
+ 
+(1 row)
+
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'renamed_graph';
+     name      | namespace 
+---------------+-----------
+ renamed_graph | public
+(1 row)
+
+SELECT name, namespace FROM NeoPostGraph.np_graph WHERE name = 'rename_me';
+ name | namespace 
+------+-----------
+(0 rows)
+
+
+SELECT n.nspname, c.relname
+FROM NeoPostGraph.np_graph g
+JOIN pg_class c ON c.oid = g.vertex_id_seq
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE g.name = 'renamed_graph';
+ nspname |        relname         
+---------+------------------------
+ public  | vertex_label_id_seq_15
+(1 row)
+
+
+-- already that name
+SELECT NeoPostGraph.rename_graph('renamed_graph', 'renamed_graph', 'public');
+NOTICE:  graph "renamed_graph" is already named "renamed_graph"
+ rename_graph 
+--------------
+ 
+(1 row)
+
+
+-- name collision in the same namespace
+SELECT NeoPostGraph.rename_graph('renamed_graph', 'conflict_test', 'public');
+ERROR:  graph "conflict_test" already exists in the namespace "public"
+
+-- missing graph
+SELECT NeoPostGraph.rename_graph('no_such_graph', 'whatever', 'public');
+ERROR:  graph "no_such_graph" does not exist in the namespace "public"
+
+---
 --- Verification
 ---
 SELECT * FROM NeoPostGraph.np_graph;
@@ -334,7 +398,8 @@ SELECT * FROM NeoPostGraph.np_graph;
  12 | alter_move                                                      | other_schema        | neopostgraph.np_vertex_label_12 | other_schema.vertex_label_id_seq_12       | neopostgraph.np_edge_label_12 | other_schema.edge_label_id_seq_12       | other_schema.np_annotation_schema_12       | other_schema.np_annotation_schema_phys_map_12
  13 | alter_dup                                                       | other_schema        | neopostgraph.np_vertex_label_13 | other_schema.vertex_label_id_seq_13       | neopostgraph.np_edge_label_13 | other_schema.edge_label_id_seq_13       | other_schema.np_annotation_schema_13       | other_schema.np_annotation_schema_phys_map_13
  14 | alter_dup                                                       | public              | neopostgraph.np_vertex_label_14 | vertex_label_id_seq_14                    | neopostgraph.np_edge_label_14 | edge_label_id_seq_14                    | np_annotation_schema_14                    | np_annotation_schema_phys_map_14
-(14 rows)
+ 15 | renamed_graph                                                   | public              | neopostgraph.np_vertex_label_15 | vertex_label_id_seq_15                    | neopostgraph.np_edge_label_15 | edge_label_id_seq_15                    | np_annotation_schema_15                    | np_annotation_schema_phys_map_15
+(15 rows)
 
 
 -- Cleanup
