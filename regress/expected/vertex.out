@@ -1440,6 +1440,44 @@ SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 (1 row)
 
 -- =====================================================================
+-- add_annotation_label must update is_primary = false partitions too.
+-- After dropping 'department', ID 6 is still a descendant of _.entity
+-- but is_primary = f. Schema DDL has to write its annotation_map.
+-- =====================================================================
+SELECT add_annotation_label('drop_graph', 'entity', 'ArchivedTag');
+NOTICE:  Annotation label "ArchivedTag" cascaded to 3 structural label(s) under "entity"
+ add_annotation_label 
+----------------------
+ 
+(1 row)
+
+SELECT id, ltree, annotation_map, is_primary
+FROM np_vertex_label_22
+ORDER BY id;
+ id |         ltree         | annotation_map | is_primary 
+----+-----------------------+----------------+------------
+  1 | _                     |                | t
+  2 | _.entity              | {ArchivedTag}  | t
+  3 | _.organization        |                | t
+  4 | _                     |                | f
+  5 | _.entity.organization | {ArchivedTag}  | t
+  6 | _.entity.organization | {ArchivedTag}  | f
+(6 rows)
+
+-- Instance DML against the archived partition (Engineering lives in table 6)
+SELECT add_vertex_annotation_label(1::int8, 6, 22, 'ArchivedTag');
+ add_vertex_annotation_label 
+-----------------------------
+ 
+(1 row)
+
+SELECT id, annotations FROM np_vertex_22_6_annotations WHERE id = 1;
+ id | annotations 
+----+-------------
+  1 | \x01
+(1 row)
+
+-- =====================================================================
 -- SCENARIO B: Drop an intermediate label ('organization')
 -- Expected: Both Acme Corp and Engineering logically shift to _.entity without moving
 -- =====================================================================
@@ -1473,9 +1511,9 @@ SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
 (1 row)
 
 SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
- id |                               vertex                                
-----+---------------------------------------------------------------------
-  1 | {"id": 1, "label": "entity", "properties": {"name": "Engineering"}}
+ id |                                     vertex                                      
+----+---------------------------------------------------------------------------------
+  1 | {"id": 1, "label": "entity:ArchivedTag", "properties": {"name": "Engineering"}}
 (1 row)
 
 -- =====================================================================
@@ -1515,9 +1553,9 @@ SELECT id, vertex FROM np_vertex_22_5 ORDER BY id;
 (1 row)
 
 SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
- id |                            vertex                             
-----+---------------------------------------------------------------
-  1 | {"id": 1, "label": "", "properties": {"name": "Engineering"}}
+ id |                                  vertex                                  
+----+--------------------------------------------------------------------------
+  1 | {"id": 1, "label": "ArchivedTag", "properties": {"name": "Engineering"}}
 (1 row)
 
 -- =====================================================================
@@ -1617,8 +1655,8 @@ FROM np_vertex_21_2_arraylist
 ORDER BY id;
  id |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       adj_list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
 ----+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 7, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 850, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 851, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
-  2 | [{"edge_id": 7, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 850, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 851, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+  1 | [{"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 1, "other_lid": 10, "xmin": 834, "xmax": 835, "cmin": 50, "cmax": 0, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 4, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 7, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 852, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 853, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 0, "other_id": 2, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
+  2 | [{"edge_id": 7, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 852, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 8, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 853, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 809, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 807, "xmax": 834, "cmin": 0, "cmax": 50, "flags": 0}]
   4 | [{"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 1, "other_lid": 2, "xmin": 835, "xmax": 837, "cmin": 0, "cmax": 0, "flags": 0}, {"edge_id": 4, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}, {"edge_id": 3, "edge_lid": 1, "dir": 1, "other_id": 3, "other_lid": 1, "xmin": 837, "xmax": 0, "cmin": 0, "cmax": 4294967295, "flags": 0}]
 (3 rows)
 

@@ -116,6 +116,7 @@ static void create_label_caches(void);
 static void create_vertex_label_cache(void);
 static void invalidate_label_caches(Datum arg, int cache_id, uint32 hash_value);
 static void flush_vertex_label_cache(void);
+void flush_edge_label_cache(void);
 static label_cache_data *search_vertex_label_cache_miss(graph_id_label_id_cache_key *key);
 static void fill_vertex_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
 static void fill_edge_label_cache_data(label_cache_data *cache_data, HeapTuple tuple, TupleDesc tuple_desc);
@@ -408,6 +409,25 @@ static void flush_vertex_label_cache(void)
 
         if (!hash_search(vertex_label_graph_id_id_cache_hash, &entry->key.graph_id, HASH_REMOVE, NULL))
             ereport(ERROR, (errmsg_internal("label (graphid,labelid) cache corrupted")));
+    }
+}
+
+void flush_edge_label_cache(void)
+{
+    HASH_SEQ_STATUS hash_seq;
+
+    if (edge_label_graph_id_id_cache_hash == NULL)
+        return;
+
+    hash_seq_init(&hash_seq, edge_label_graph_id_id_cache_hash);
+    for (;;)
+    {
+        label_graphid_id_cache_entry *entry = hash_seq_search(&hash_seq);
+        if (!entry)
+            break;
+
+        if (!hash_search(edge_label_graph_id_id_cache_hash, &entry->key, HASH_REMOVE, NULL))
+            ereport(ERROR, (errmsg_internal("edge label (graphid,labelid) cache corrupted")));
     }
 }
 
@@ -817,6 +837,7 @@ np_cache_xact_callback(XactEvent event, void *arg)
         case XACT_EVENT_PARALLEL_ABORT:
             flush_graph_name_namespace_cache();
             flush_vertex_label_cache();
+            flush_edge_label_cache();
             flush_dictionary_cache();
 
             break;

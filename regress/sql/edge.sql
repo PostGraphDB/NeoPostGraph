@@ -152,6 +152,24 @@ SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
 -- 5b. Prove String State: edge_out should revert to base label "friend"
 SELECT * FROM np_edge_31_9 WHERE id = 2;
 
+--
+-- Schema DDL: add_annotation_label on edge structural labels
+-- Cascades to every catalog row under the structural path, including
+-- is_primary = false partitions. Creates annotations_tbl when missing.
+--
+SELECT add_annotation_label('edge_graph', 'friend', 'bestie');
+SELECT id, ltree, annotation_map, is_primary FROM np_edge_label_31 WHERE id = 9;
+
+SELECT add_edge_annotation(2::int8, 9, 31, 'bestie');
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+
+SELECT add_annotation_label('edge_graph', 'colleague', 'former');
+SELECT id, ltree, annotations_tbl IS NOT NULL AS has_annot_tbl, annotation_map, is_primary
+FROM np_edge_label_31
+WHERE ltree = '_.colleague'::ltree OR ltree ~ '*.colleague.*'::lquery
+ORDER BY id;
+
 -- =====================================================================
 -- TEST: drop_elabel (O(1) Metadata-Only Migration)
 -- =====================================================================

@@ -474,6 +474,21 @@ SELECT id, ltree, tbl, is_primary FROM np_vertex_label_22 ORDER BY id;
 -- Verify O(1) Storage: 'Engineering' must STILL live in its original physical table!
 SELECT id, vertex FROM np_vertex_22_6 ORDER BY id;
 
+-- =====================================================================
+-- add_annotation_label must update is_primary = false partitions too.
+-- After dropping 'department', ID 6 is still a descendant of _.entity
+-- but is_primary = f. Schema DDL has to write its annotation_map.
+-- =====================================================================
+SELECT add_annotation_label('drop_graph', 'entity', 'ArchivedTag');
+
+SELECT id, ltree, annotation_map, is_primary
+FROM np_vertex_label_22
+ORDER BY id;
+
+-- Instance DML against the archived partition (Engineering lives in table 6)
+SELECT add_vertex_annotation_label(1::int8, 6, 22, 'ArchivedTag');
+SELECT id, annotations FROM np_vertex_22_6_annotations WHERE id = 1;
+
 
 -- =====================================================================
 -- SCENARIO B: Drop an intermediate label ('organization')

@@ -350,6 +350,59 @@ SELECT * FROM np_edge_31_9 WHERE id = 2;
   2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend", "properties": {"met": "college"}}
 (1 row)
 
+--
+-- Schema DDL: add_annotation_label on edge structural labels
+-- Cascades to every catalog row under the structural path, including
+-- is_primary = false partitions. Creates annotations_tbl when missing.
+--
+SELECT add_annotation_label('edge_graph', 'friend', 'bestie');
+NOTICE:  Annotation label "bestie" cascaded to 1 structural label(s) under "friend"
+ add_annotation_label 
+----------------------
+ 
+(1 row)
+
+SELECT id, ltree, annotation_map, is_primary FROM np_edge_label_31 WHERE id = 9;
+ id |  ltree   |     annotation_map     | is_primary 
+----+----------+------------------------+------------
+  9 | _.friend | {close,distant,bestie} | t
+(1 row)
+
+SELECT add_edge_annotation(2::int8, 9, 31, 'bestie');
+ add_edge_annotation 
+---------------------
+ 
+(1 row)
+
+SELECT id, annotations FROM np_edge_annotations_31_9 WHERE id = 2;
+ id | annotations 
+----+-------------
+  2 | \x04
+(1 row)
+
+SELECT * FROM np_edge_31_9 WHERE id = 2;
+ id |                                                        edge                                                        
+----+--------------------------------------------------------------------------------------------------------------------
+  2 | {"id": 2, "start_vertex": (2,1), "edge_vertex": (2,2), "label": "friend:bestie", "properties": {"met": "college"}}
+(1 row)
+
+SELECT add_annotation_label('edge_graph', 'colleague', 'former');
+NOTICE:  Annotation label "former" cascaded to 2 structural label(s) under "colleague"
+ add_annotation_label 
+----------------------
+ 
+(1 row)
+
+SELECT id, ltree, annotations_tbl IS NOT NULL AS has_annot_tbl, annotation_map, is_primary
+FROM np_edge_label_31
+WHERE ltree = '_.colleague'::ltree OR ltree ~ '*.colleague.*'::lquery
+ORDER BY id;
+ id |        ltree         | has_annot_tbl | annotation_map | is_primary 
+----+----------------------+---------------+----------------+------------
+  4 | _.colleague          | t             | {former}       | t
+  8 | _.colleague.promoted | t             | {former}       | t
+(2 rows)
+
 -- =====================================================================
 -- TEST: drop_elabel (O(1) Metadata-Only Migration)
 -- =====================================================================

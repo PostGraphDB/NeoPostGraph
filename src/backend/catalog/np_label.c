@@ -1623,6 +1623,208 @@ remove_vertex_annotation_label(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
+static Datum
+np_find_struct_ltree(Relation meta_rel, const char *struct_label_str)
+{
+    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    HeapTuple tuple;
+    Datum found = (Datum) 0;
+
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+    {
+        bool isnull;
+        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (isnull)
+            continue;
+
+        char *cached_str = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_val));
+        char *start = cached_str;
+        if (strncmp(start, "_.", 2) == 0)
+            start += 2;
+        else if (strcmp(start, "_") == 0)
+            start = "";
+
+        if (strcmp(start, struct_label_str) == 0)
+        {
+            found = PointerGetDatum(PG_DETOAST_DATUM_COPY(ltree_val));
+            pfree(cached_str);
+            break;
+        }
+        pfree(cached_str);
+    }
+
+    systable_endscan(scan);
+    return found;
+}
+
+/* Heap-scan every catalog row, including is_primary = false partitions. */
+static List *
+np_collect_ltree_descendants(Relation meta_rel, Datum target_ltree)
+{
+    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
+    List *tuples = NIL;
+    HeapTuple tuple;
+
+    while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+    {
+        bool isnull;
+        Datum row_ltree = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
+        if (isnull)
+            continue;
+
+        if (DatumGetBool(DirectFunctionCall2(ltree_isparent, target_ltree, row_ltree)))
+            tuples = lappend(tuples, heap_copytuple(tuple));
+    }
+
+    systable_endscan(scan);
+    return tuples;
+}
+
+static bool
+np_apply_add_annotation_to_tuple(graph_cache_data *graph_entry,
+                                 Relation meta_rel,
+                                 HeapTuple tuple,
+                                 char *new_annot_str,
+                                 Oid namespace,
+                                 int annot_map_attno,
+                                 int annot_tbl_attno,
+                                 const char *entity_prefix,
+                                 const char *annot_tbl_fmt)
+{
+    bool isnull;
+    int32 label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
+
+    char *entity_tbl_name = psprintf("%s_%d_%d", entity_prefix, graph_entry->id, label_id);
+    Oid entity_tbl_oid = get_relname_relid(entity_tbl_name, namespace);
+    if (OidIsValid(entity_tbl_oid))
+        LockRelationOid(entity_tbl_oid, AccessExclusiveLock);
+    pfree(entity_tbl_name);
+
+    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) /
+        (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
+    ItemPointerData schema_pmap_tid;
+    np_id_to_tid(label_id, pmap_tuples_per_page, &schema_pmap_tid);
+
+    Relation pmap_rel = table_open(graph_entry->annot_schema_phys_map, AccessShareLock);
+    ItemPointerData latest_schema_tid;
+    ItemPointerSetInvalid(&latest_schema_tid);
+
+    BlockNumber pmap_blk = ItemPointerGetBlockNumber(&schema_pmap_tid);
+    if (pmap_blk < RelationGetNumberOfBlocks(pmap_rel))
+    {
+        Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
+        LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
+        Page pmap_page = BufferGetPage(pmap_buf);
+        ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
+
+        if (ItemIdIsNormal(pmap_lp))
+        {
+            NeoPhysMapRecord *pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
+            latest_schema_tid = pmap_rec->v_itemptr;
+        }
+        UnlockReleaseBuffer(pmap_buf);
+    }
+    table_close(pmap_rel, AccessShareLock);
+
+    ArrayType *old_array = NULL;
+    if (ItemPointerIsValid(&latest_schema_tid))
+    {
+        Relation schema_rel = table_open(graph_entry->annot_schema_tbl, AccessShareLock);
+        Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
+        LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
+        Page schema_page = BufferGetPage(schema_buf);
+        ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
+
+        if (ItemIdIsNormal(schema_lp))
+        {
+            NPEntityTupleHeader hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
+            old_array = DatumGetArrayTypePCopy(PointerGetDatum(hdr->serialized_entity));
+        }
+        UnlockReleaseBuffer(schema_buf);
+        table_close(schema_rel, AccessShareLock);
+    }
+
+    if (old_array == NULL)
+    {
+        Datum map_datum = heap_getattr(tuple, annot_map_attno, RelationGetDescr(meta_rel), &isnull);
+        if (!isnull)
+            old_array = DatumGetArrayTypePCopy(map_datum);
+    }
+
+    Datum *d_old = NULL;
+    bool *n_old = NULL;
+    int c_old = 0;
+    bool already_exists = false;
+
+    if (old_array != NULL && ARR_NDIM(old_array) > 0)
+    {
+        deconstruct_array(old_array, TEXTOID, -1, false, 'i', &d_old, &n_old, &c_old);
+        for (int i = 0; i < c_old; i++)
+        {
+            if (n_old[i])
+                continue;
+            if (strcmp(TextDatumGetCString(d_old[i]), new_annot_str) == 0)
+            {
+                already_exists = true;
+                break;
+            }
+        }
+    }
+
+    if (already_exists)
+    {
+        if (old_array)
+            pfree(old_array);
+        return false;
+    }
+
+    Datum *d_new = (Datum *) palloc0((c_old + 1) * sizeof(Datum));
+    for (int i = 0; i < c_old; i++)
+        d_new[i] = d_old[i];
+    d_new[c_old] = CStringGetTextDatum(new_annot_str);
+
+    ArrayType *new_array = construct_array(d_new, c_old + 1, TEXTOID, -1, false, 'i');
+
+    insert_annotation_schema(graph_entry->id, label_id, new_array,
+                             graph_entry->annot_schema_tbl,
+                             graph_entry->annot_schema_phys_map);
+
+    int natts = RelationGetDescr(meta_rel)->natts;
+    Datum *values = (Datum *) palloc0(natts * sizeof(Datum));
+    bool *nulls = (bool *) palloc0(natts * sizeof(bool));
+    bool *replace = (bool *) palloc0(natts * sizeof(bool));
+
+    replace[annot_map_attno - 1] = true;
+    values[annot_map_attno - 1] = PointerGetDatum(new_array);
+    nulls[annot_map_attno - 1] = false;
+
+    Datum annot_tbl_datum = heap_getattr(tuple, annot_tbl_attno, RelationGetDescr(meta_rel), &isnull);
+    if (isnull || !OidIsValid(DatumGetObjectId(annot_tbl_datum)))
+    {
+        int byte_alloc = (c_old + 1 + 7) / 8;
+        char *annot_name = psprintf(annot_tbl_fmt, graph_entry->id, label_id);
+        Oid annot_oid = create_vertex_label_annotation_table(annot_name, namespace, byte_alloc);
+        pfree(annot_name);
+
+        replace[annot_tbl_attno - 1] = true;
+        values[annot_tbl_attno - 1] = ObjectIdGetDatum(annot_oid);
+        nulls[annot_tbl_attno - 1] = false;
+    }
+
+    HeapTuple updated_tup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel), values, nulls, replace);
+    np_catalog_update(meta_rel, tuple, updated_tup);
+    heap_freetuple(updated_tup);
+
+    pfree(values);
+    pfree(nulls);
+    pfree(replace);
+    pfree(d_new);
+    if (old_array)
+        pfree(old_array);
+
+    return true;
+}
+
 PG_FUNCTION_INFO_V1(add_annotation_label);
 Datum add_annotation_label(PG_FUNCTION_ARGS)
 {
@@ -1661,174 +1863,50 @@ Datum add_annotation_label(PG_FUNCTION_ARGS)
         ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
                         errmsg("graph \"%s\" does not exist", graph_name)));
 
-    /* 4. Open the Metadata Table and Find the Base Label's ltree */
-    Relation meta_rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", graph_entry->id), "table"), RowExclusiveLock);
-    SysScanDesc scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
-    HeapTuple tuple;
-    
-    Datum target_ltree = (Datum)0;
-    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
-        bool isnull;
-        Datum ltree_val = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
-        char *cached_str = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_val));
-        
-        char *start = cached_str;
-        if (strncmp(start, "_.", 2) == 0) start += 2;
-        else if (strcmp(start, "_") == 0) start = "";
+    /* 4. Heap-scan vertex AND edge catalogs, including is_primary = false rows. */
+    int updated_count = 0;
+    bool found = false;
+    ListCell *lc;
 
-        if (strcmp(start, struct_label_str) == 0) {
-            target_ltree = ltree_val;
-            pfree(cached_str);
-            break;
+    Relation v_rel = table_open(np_relation_id(psprintf("np_vertex_label_%d", graph_entry->id), "table"), RowExclusiveLock);
+    Datum v_target = np_find_struct_ltree(v_rel, struct_label_str);
+    if (v_target != (Datum) 0)
+    {
+        List *v_tups = np_collect_ltree_descendants(v_rel, v_target);
+        found = true;
+        foreach(lc, v_tups)
+        {
+            HeapTuple tuple = (HeapTuple) lfirst(lc);
+            if (np_apply_add_annotation_to_tuple(graph_entry, v_rel, tuple, new_annot_str, namespace,
+                                                 9, 8, "np_vertex", "np_vertex_%d_%d_annotations"))
+                updated_count++;
+            heap_freetuple(tuple);
         }
-        pfree(cached_str);
+        list_free(v_tups);
     }
-    systable_endscan(scan);
+    table_close(v_rel, RowExclusiveLock);
 
-    if (target_ltree == (Datum)0) {
-        table_close(meta_rel, RowExclusiveLock);
+    Relation e_rel = table_open(np_relation_id(psprintf("np_edge_label_%d", graph_entry->id), "table"), RowExclusiveLock);
+    Datum e_target = np_find_struct_ltree(e_rel, struct_label_str);
+    if (e_target != (Datum) 0)
+    {
+        List *e_tups = np_collect_ltree_descendants(e_rel, e_target);
+        found = true;
+        foreach(lc, e_tups)
+        {
+            HeapTuple tuple = (HeapTuple) lfirst(lc);
+            if (np_apply_add_annotation_to_tuple(graph_entry, e_rel, tuple, new_annot_str, namespace,
+                                                 6, 5, "np_edge", "np_edge_annotations_%d_%d"))
+                updated_count++;
+            heap_freetuple(tuple);
+        }
+        list_free(e_tups);
+    }
+    table_close(e_rel, RowExclusiveLock);
+
+    if (!found)
         ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
                         errmsg("Structural label \"%s\" not found in graph \"%s\"", struct_label_str, graph_name)));
-    }
-    target_ltree = PointerGetDatum(PG_DETOAST_DATUM(target_ltree));
-
-    /* 5. Second Scan: Iterate over all labels in the hierarchy */
-    
-    scan = systable_beginscan(meta_rel, InvalidOid, false, NULL, 0, NULL);
-    uint32 pmap_tuples_per_page = (BLCKSZ - SizeOfPageHeaderData) / (sizeof(NeoPhysMapRecord) + sizeof(ItemIdData));
-
-    int updated_count = 0;
-
-    while (HeapTupleIsValid(tuple = systable_getnext(scan))) {
-        bool isnull;
-        Datum row_ltree = heap_getattr(tuple, 2, RelationGetDescr(meta_rel), &isnull);
-
-        /* 
-         * Check if this row is an ltree descendant of target_ltree using ltree_isancestor (@>)
-         * This matches _.person, _.person.employee, _.person.employee.engineer, etc.
-         */
-        bool is_descendant = DatumGetBool(DirectFunctionCall2(ltree_isparent, target_ltree, row_ltree));
-
-        if (is_descendant) {
-            int32 label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(meta_rel), &isnull));
-
-            /* A. Read Latest Schema from Entity Store for this label_id */
-            /* Lock the physical vertex table so concurrent DML inserts wait for the schema commit */
-            char *vertex_tbl_name = psprintf("np_vertex_%d_%d", graph_entry->id, label_id);
-            Oid vertex_tbl_oid = get_relname_relid(vertex_tbl_name, namespace);
-            if (OidIsValid(vertex_tbl_oid)) {
-                LockRelationOid(vertex_tbl_oid, AccessExclusiveLock);
-            }
-            pfree(vertex_tbl_name);
-
-
-
-            ItemPointerData schema_pmap_tid;
-            np_id_to_tid(label_id, pmap_tuples_per_page, &schema_pmap_tid);
-
-            Relation pmap_rel = table_open(graph_entry->annot_schema_phys_map, AccessShareLock);
-            ItemPointerData latest_schema_tid;
-            ItemPointerSetInvalid(&latest_schema_tid);
-
-            /* SAFELY check if the block exists before reading */
-            BlockNumber pmap_blk = ItemPointerGetBlockNumber(&schema_pmap_tid);
-            if (pmap_blk < RelationGetNumberOfBlocks(pmap_rel)) {
-                Buffer pmap_buf = ReadBuffer(pmap_rel, pmap_blk);
-                LockBuffer(pmap_buf, BUFFER_LOCK_SHARE);
-                Page pmap_page = BufferGetPage(pmap_buf);
-                ItemId pmap_lp = PageGetItemId(pmap_page, ItemPointerGetOffsetNumber(&schema_pmap_tid));
-
-                if (ItemIdIsNormal(pmap_lp)) {
-                    NeoPhysMapRecord *pmap_rec = (NeoPhysMapRecord *) PageGetItem(pmap_page, pmap_lp);
-                    latest_schema_tid = pmap_rec->v_itemptr;
-                }
-                UnlockReleaseBuffer(pmap_buf);
-            }
-            table_close(pmap_rel, AccessShareLock);
-
-            ArrayType *old_array = NULL;
-            if (ItemPointerIsValid(&latest_schema_tid)) {
-                Relation schema_rel = table_open(graph_entry->annot_schema_tbl, AccessShareLock);
-                Buffer schema_buf = ReadBuffer(schema_rel, ItemPointerGetBlockNumber(&latest_schema_tid));
-                LockBuffer(schema_buf, BUFFER_LOCK_SHARE);
-                Page schema_page = BufferGetPage(schema_buf);
-                ItemId schema_lp = PageGetItemId(schema_page, ItemPointerGetOffsetNumber(&latest_schema_tid));
-
-                if (ItemIdIsNormal(schema_lp)) {
-                    NPEntityTupleHeader hdr = (NPEntityTupleHeader) PageGetItem(schema_page, schema_lp);
-                    old_array = DatumGetArrayTypePCopy(PointerGetDatum(hdr->serialized_entity));
-                }
-                UnlockReleaseBuffer(schema_buf);
-                table_close(schema_rel, AccessShareLock);
-            }
-
-            /* Fallback to Column 9 (annotation_map) if no entity record exists yet */
-            if (old_array == NULL) {
-                Datum col9_datum = heap_getattr(tuple, 9, RelationGetDescr(meta_rel), &isnull);
-                if (!isnull) {
-                    old_array = DatumGetArrayTypePCopy(col9_datum);
-                }
-            }
-
-            /* B. Deconstruct existing array and check if new_annot_str already exists */
-            Datum *d_old = NULL;
-            bool *n_old = NULL;
-            int c_old = 0;
-            bool already_exists = false;
-
-            if (old_array != NULL && ARR_NDIM(old_array) > 0) {
-                deconstruct_array(old_array, TEXTOID, -1, false, 'i', &d_old, &n_old, &c_old);
-                for (int i = 0; i < c_old; i++) {
-                    if (n_old[i]) continue;
-                    if (strcmp(TextDatumGetCString(d_old[i]), new_annot_str) == 0) {
-                        already_exists = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!already_exists) {
-                /* C. Append new annotation string to this label's schema array */
-                Datum *d_new = (Datum *) palloc0((c_old + 1) * sizeof(Datum));
-                for (int i = 0; i < c_old; i++) {
-                    d_new[i] = d_old[i];
-                }
-                d_new[c_old] = CStringGetTextDatum(new_annot_str);
-
-                ArrayType *new_array = construct_array(d_new, c_old + 1, TEXTOID, -1, false, 'i');
-
-                /* D. Write Temporal Schema Record to Entity Store */
-                insert_annotation_schema(graph_entry->id, label_id, new_array, 
-                                         graph_entry->annot_schema_tbl, 
-                                         graph_entry->annot_schema_phys_map);
-
-                /* E. In-Place Update column 9 (annotation_map) of this catalog tuple */
-                int natts = RelationGetDescr(meta_rel)->natts;
-                Datum *values = (Datum *) palloc0(natts * sizeof(Datum));
-                bool *nulls = (bool *) palloc0(natts * sizeof(bool));
-                bool *replace = (bool *) palloc0(natts * sizeof(bool));
-
-                replace[8] = true; /* index 8 = column 9 (annotation_map) */
-                values[8] = PointerGetDatum(new_array);
-                nulls[8] = false;
-
-                HeapTuple updated_tup = heap_modify_tuple(tuple, RelationGetDescr(meta_rel), values, nulls, replace);
-                np_catalog_update(meta_rel, tuple, updated_tup);
-                heap_freetuple(updated_tup);
-
-                pfree(values);
-                pfree(nulls);
-                pfree(replace);
-                pfree(d_new);
-
-                updated_count++;
-            }
-            if (old_array) pfree(old_array);
-        }
-    }
-
-    systable_endscan(scan);
-    table_close(meta_rel, RowExclusiveLock);
 
     /* 6. Register in Global Label Catalog */
     char *cat_name = psprintf("np_label_catalog_%d", graph_entry->id);
@@ -1847,6 +1925,34 @@ Datum add_annotation_label(PG_FUNCTION_ARGS)
 }
 
 
+static Oid
+np_resolve_edge_annotations_tbl(const label_cache_data *cache, int32 graph_id, int32 label_id)
+{
+    if (cache && OidIsValid(cache->annotations_tbl))
+        return cache->annotations_tbl;
+
+    Relation rel = table_open(np_relation_id(psprintf("np_edge_label_%d", graph_id), "table"), AccessShareLock);
+    ScanKeyData skey[1];
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_INT4EQ, Int32GetDatum(label_id));
+    SysScanDesc scan = systable_beginscan(rel,
+                        np_relation_id(psprintf("np_edge_label_%d_btree_idx", graph_id), "index"),
+                        true, NULL, 1, skey);
+    HeapTuple tuple = systable_getnext(scan);
+    Oid annot_tbl = InvalidOid;
+
+    if (HeapTupleIsValid(tuple))
+    {
+        bool isnull;
+        Datum d = heap_getattr(tuple, 5, RelationGetDescr(rel), &isnull);
+        if (!isnull)
+            annot_tbl = DatumGetObjectId(d);
+    }
+
+    systable_endscan(scan);
+    table_close(rel, AccessShareLock);
+    return annot_tbl;
+}
+
 PG_FUNCTION_INFO_V1(add_edge_annotation);
 Datum
 add_edge_annotation(PG_FUNCTION_ARGS)
@@ -1864,7 +1970,9 @@ add_edge_annotation(PG_FUNCTION_ARGS)
     const label_cache_data *label_cache =
         search_edge_label_graph_id_label_id_cache(graph_id, label_id);
 
-    if (!label_cache || !OidIsValid(label_cache->annotations_tbl))
+    Oid annotations_tbl = np_resolve_edge_annotations_tbl(label_cache, graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(annotations_tbl))
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                  errmsg("Structural edge label does not support annotations: graph_id=%d, label_id=%d",
@@ -1977,7 +2085,7 @@ add_edge_annotation(PG_FUNCTION_ARGS)
     UnlockReleaseBuffer(pmap_buf);
 
     ItemPointerData old_annot_tid = current_pmap_rec.a_itemptr;
-    Relation annot_rel = table_open(label_cache->annotations_tbl, RowExclusiveLock);
+    Relation annot_rel = table_open(annotations_tbl, RowExclusiveLock);
 
     /* DEFENSE: Instantly drop garbage memory pointers from old insert_edge calls */
     if (ItemPointerIsValid(&old_annot_tid)) {
@@ -2093,7 +2201,9 @@ remove_edge_annotation(PG_FUNCTION_ARGS)
     const label_cache_data *label_cache =
         search_edge_label_graph_id_label_id_cache(graph_id, label_id);
 
-    if (!label_cache || !OidIsValid(label_cache->annotations_tbl))
+    Oid annotations_tbl = np_resolve_edge_annotations_tbl(label_cache, graph_id, label_id);
+
+    if (!label_cache || !OidIsValid(annotations_tbl))
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                  errmsg("Structural edge label does not support annotations: graph_id=%d, label_id=%d",
@@ -2206,7 +2316,7 @@ remove_edge_annotation(PG_FUNCTION_ARGS)
     UnlockReleaseBuffer(pmap_buf);
 
     ItemPointerData old_annot_tid = current_pmap_rec.a_itemptr;
-    Relation annot_rel = table_open(label_cache->annotations_tbl, RowExclusiveLock);
+    Relation annot_rel = table_open(annotations_tbl, RowExclusiveLock);
 
     /* DEFENSE: Instantly drop garbage memory pointers from old insert_edge calls */
     if (ItemPointerIsValid(&old_annot_tid)) {
