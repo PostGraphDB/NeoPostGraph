@@ -17,7 +17,11 @@
 #define NP_CATALOG_H
 
 #include "postgres.h"
+#include "access/htup.h"
+#include "access/relscan.h"
 #include "catalog/namespace.h"
+#include "executor/tuptable.h"
+#include "utils/rel.h"
 
 Oid np_namespace_id(void);
 
@@ -28,5 +32,9 @@ Oid neopostgraph_catalog_namespace_id(void);
 
 Constraint *build_not_null_constraint(void);
 Constraint *build_unique_constraint(void);
+
+void np_catalog_insert(Relation rel, HeapTuple tup);
+void np_catalog_delete(Relation rel, ItemPointer tid);
+HeapTuple np_catalog_slot_getnext(TableScanDesc scan, TupleTableSlot *slot);
 
 #endif

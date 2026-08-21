@@ -115,7 +115,7 @@ void insert_graph(const Name graph_name, const Oid namespace, int graph_id, Oid 
     };
     bool nulls[9] = { false, false, false, false, false, false, false, false };
 
-    CatalogTupleInsert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
+    np_catalog_insert(rel, heap_form_tuple(RelationGetDescr(rel), values, nulls));
 
     table_close(rel, RowExclusiveLock);
 
@@ -376,7 +376,7 @@ alter_graph(PG_FUNCTION_ARGS)
     values[2] = ObjectIdGetDatum(new_nsp);
     replace[2] = true;
     new_tup = heap_modify_tuple(old_tup, RelationGetDescr(np_graph), values, nulls, replace);
-    CatalogTupleUpdate(np_graph, &old_tup->t_self, new_tup);
+    np_catalog_update(np_graph, old_tup, new_tup);
     heap_freetuple(new_tup);
     systable_endscan(scan);
     table_close(np_graph, RowExclusiveLock);
@@ -474,7 +474,7 @@ rename_graph(PG_FUNCTION_ARGS)
     values[1] = NameGetDatum(&new_name_data);
     replace[1] = true;
     new_tup = heap_modify_tuple(old_tup, RelationGetDescr(np_graph), values, nulls, replace);
-    CatalogTupleUpdate(np_graph, &old_tup->t_self, new_tup);
+    np_catalog_update(np_graph, old_tup, new_tup);
     heap_freetuple(new_tup);
     systable_endscan(scan);
     table_close(np_graph, RowExclusiveLock);
@@ -550,7 +550,7 @@ drop_graph(PG_FUNCTION_ARGS)
                         errmsg("graph \"%s\" catalog row not found", graph_name)));
     }
 
-    CatalogTupleDelete(np_graph, &old_tup->t_self);
+    np_catalog_delete(np_graph, &old_tup->t_self);
     systable_endscan(scan);
     table_close(np_graph, RowExclusiveLock);
     CommandCounterIncrement();

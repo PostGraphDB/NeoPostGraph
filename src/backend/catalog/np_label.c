@@ -1299,6 +1299,7 @@ Oid create_vertex_label_metadata_table(char *meta_tbl_name)
     create_stmt->oncommit = ONCOMMIT_NOOP;
     create_stmt->tablespacename = NULL;
     create_stmt->if_not_exists = false;
+    create_stmt->accessMethod = pstrdup("np_catalog");
 
     wrapper = makeNode(PlannedStmt);
     wrapper->commandType = CMD_UTILITY;
@@ -1343,7 +1344,7 @@ enforce_and_insert_label_catalog(Relation cat_rel, Relation idx_rel, char *label
         bool nulls[2] = { false, false };
 
         HeapTuple newtup = heap_form_tuple(RelationGetDescr(cat_rel), values, nulls);
-        CatalogTupleInsert(cat_rel, newtup);
+        np_catalog_insert(cat_rel, newtup);
         heap_freetuple(newtup);
     }
     
@@ -2805,17 +2806,11 @@ remove_from_label_catalog(Relation cat_rel, const char *label_str, char label_ty
     SysScanDesc scan;
     HeapTuple tuple;
     ScanKeyData skey[2];
-NameData name_val;
-namestrcpy(&name_val, label_str);
-    /* 
-     * Check if your np_label_catalog index uses F_NAMEEQ or F_TEXTEQ for col 1.
-     * Assuming standard C-string/Name matching:
-     */
     ScanKeyInit(&skey[0],
                 1, /* Attribute 1: label name */
                 BTEqualStrategyNumber,
-                F_NAMEEQ,
-                NameGetDatum(&name_val));
+                F_TEXTEQ,
+                CStringGetTextDatum(label_str));
 
     ScanKeyInit(&skey[1],
                 2, /* Attribute 2: label type ('a', 'v', 'e') */
@@ -2827,7 +2822,7 @@ namestrcpy(&name_val, label_str);
 
     while (HeapTupleIsValid(tuple = systable_getnext(scan)))
     {
-        CatalogTupleDelete(cat_rel, &tuple->t_self);
+        np_catalog_delete(cat_rel, &tuple->t_self);
     }
 
     systable_endscan(scan);
@@ -2919,13 +2914,13 @@ Datum drop_annotation_label(PG_FUNCTION_ARGS)
     NameData name_val;
 namestrcpy(&name_val, drop_annot_str);
     ScanKeyData skey[2];
-    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_val));
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, CStringGetTextDatum(drop_annot_str));
     ScanKeyInit(&skey[1], 2, BTEqualStrategyNumber, F_CHAREQ, CharGetDatum('a'));
     
     SysScanDesc cat_scan = systable_beginscan(cat_rel, InvalidOid, false, NULL, 2, skey);
     HeapTuple cat_tuple;
     while (HeapTupleIsValid(cat_tuple = systable_getnext(cat_scan))) {
-        CatalogTupleDelete(cat_rel, &cat_tuple->t_self);
+        np_catalog_delete(cat_rel, &cat_tuple->t_self);
     }
     systable_endscan(cat_scan);
     table_close(cat_rel, RowExclusiveLock);
@@ -3165,7 +3160,7 @@ void np_catalog_update(Relation rel, HeapTuple old_tup, HeapTuple new_tup)
             if (satisfy_predicate) {
                 index_insert(indexDesc, idx_values, idx_nulls,
                              &(slot->tts_tid), rel,
-                             indexDesc->rd_index->indisunique ? UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
+                             UNIQUE_CHECK_NO,
                              false, /* indexUnchanged */
                              indexInfo);
             }

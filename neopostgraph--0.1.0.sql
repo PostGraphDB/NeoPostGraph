@@ -405,6 +405,13 @@ LANGUAGE C STRICT;
 
 CREATE ACCESS METHOD entity_store TYPE TABLE HANDLER np_entity_store_handler;
 
+CREATE OR REPLACE FUNCTION np_catalog_handler(internal)
+RETURNS table_am_handler
+AS 'MODULE_PATHNAME', 'np_catalog_handler'
+LANGUAGE C STRICT;
+
+CREATE ACCESS METHOD np_catalog TYPE TABLE HANDLER np_catalog_handler;
+
 CREATE FUNCTION nparraylist_handler(internal)
 RETURNS table_am_handler
 LANGUAGE C
@@ -441,7 +448,7 @@ CREATE TABLE np_graph (
     edge_id_seq regclass NOT NULL,
     annot_schema_tbl regclass NOT NULL,
     annot_schema_phys_map regclass NOT NULL
-);
+) USING np_catalog;
 
 CREATE SEQUENCE np_graph_id_seq START WITH 1 INCREMENT BY 1 MINVALUE 1 CACHE 5;
 

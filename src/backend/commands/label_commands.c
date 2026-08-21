@@ -295,7 +295,7 @@ Oid create_label_catalog_table(int graph_id) {
     label_type->constraints = list_make1(build_not_null_constraint());
 
     Oid catalog_oid = execute_internal_create_table("neopostgraph", tbl_name, 
-                                                    list_make2(label_name, label_type), NULL);
+                                                    list_make2(label_name, label_type), "np_catalog");
 
     execute_internal_create_index("neopostgraph", tbl_name, psprintf("%s_idx", tbl_name), 
                                   "label_name", "btree", true, true, NULL);
@@ -332,7 +332,7 @@ Oid create_label_metadata_table(char *meta_tbl_name) {
     cols = lappend(cols, is_primary);
 
 
-    return execute_internal_create_table("neopostgraph", meta_tbl_name, cols, NULL);
+    return execute_internal_create_table("neopostgraph", meta_tbl_name, cols, "np_catalog");
 }
 
 void create_metadata_btree_index(char *tbl_name) {

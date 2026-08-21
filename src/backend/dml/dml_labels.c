@@ -17,6 +17,8 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/htup.h"
+#include "access/table.h"
+#include "access/tableam.h"
 #include "access/htup_details.h"
 #include "access/skey.h"
 #include "catalog/indexing.h"
@@ -26,6 +28,7 @@
 #include "funcapi.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
+#include "executor/tuptable.h"
 #include "nodes/execnodes.h"
 #include "nodes/makefuncs.h"
 #include "nodes/parsenodes.h"
@@ -1200,6 +1203,7 @@ drop_vlabel(PG_FUNCTION_ARGS)
 
     /* 1. Open the Vertex Label Catalog for rewriting */
     Relation catalog_rel = table_open(graph->vertex_labels, RowExclusiveLock);
+    TupleTableSlot *slot = table_slot_create(catalog_rel, NULL);
     TableScanDesc scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
     TupleDesc tupdesc = RelationGetDescr(catalog_rel);
     HeapTuple tuple;
@@ -1207,7 +1211,7 @@ drop_vlabel(PG_FUNCTION_ARGS)
     int dropped_count = 0;
 
     /* 2. Sequentially scan the catalog (O(1) relative to entity scale) */
-    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL) {
+    while ((tuple = np_catalog_slot_getnext(scan, slot)) != NULL) {
         bool isnull;
         Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
         char *path = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
@@ -1282,22 +1286,21 @@ drop_vlabel(PG_FUNCTION_ARGS)
     }
 
     table_endscan(scan);
+    ExecDropSingleTupleTableSlot(slot);
     table_close(catalog_rel, RowExclusiveLock);
 
     /* 5. Remove the structural label from the Global Label Catalog */
     char *cat_name = psprintf("np_label_catalog_%d", graph_id);
     Relation global_cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
     
-    NameData name_val;
-    namestrcpy(&name_val, label_str);
     ScanKeyData skey[2];
-    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_val));
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, CStringGetTextDatum(label_str));
     ScanKeyInit(&skey[1], 2, BTEqualStrategyNumber, F_CHAREQ, CharGetDatum('s'));
     
     SysScanDesc global_cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 2, skey);
     HeapTuple cat_tuple;
     while (HeapTupleIsValid(cat_tuple = systable_getnext(global_cat_scan))) {
-        CatalogTupleDelete(global_cat_rel, &cat_tuple->t_self);
+        np_catalog_delete(global_cat_rel, &cat_tuple->t_self);
     }
     systable_endscan(global_cat_scan);
     table_close(global_cat_rel, RowExclusiveLock);
@@ -1319,6 +1322,7 @@ rename_vlabel(PG_FUNCTION_ARGS)
     const graph_cache_data *graph;
     Relation catalog_rel;
     TableScanDesc scan;
+    TupleTableSlot *slot;
     TupleDesc tupdesc;
     HeapTuple tuple;
     char *cat_name;
@@ -1423,10 +1427,11 @@ rename_vlabel(PG_FUNCTION_ARGS)
     }
 
     catalog_rel = table_open(graph->vertex_labels, RowExclusiveLock);
+    slot = table_slot_create(catalog_rel, NULL);
     scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
     tupdesc = RelationGetDescr(catalog_rel);
 
-    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    while ((tuple = np_catalog_slot_getnext(scan, slot)) != NULL)
     {
         bool isnull;
         Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
@@ -1490,6 +1495,7 @@ rename_vlabel(PG_FUNCTION_ARGS)
     }
 
     table_endscan(scan);
+    ExecDropSingleTupleTableSlot(slot);
     table_close(catalog_rel, RowExclusiveLock);
 
     {
@@ -1540,6 +1546,7 @@ drop_elabel(PG_FUNCTION_ARGS)
 
     /* 1. Open the Edge Label Catalog for rewriting */
     Relation catalog_rel = table_open(graph->edge_labels, RowExclusiveLock);
+    TupleTableSlot *slot = table_slot_create(catalog_rel, NULL);
     TableScanDesc scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
     TupleDesc tupdesc = RelationGetDescr(catalog_rel);
     HeapTuple tuple;
@@ -1547,7 +1554,7 @@ drop_elabel(PG_FUNCTION_ARGS)
     int dropped_count = 0;
 
     /* 2. Sequentially scan the catalog (O(1) relative to entity scale) */
-    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL) {
+    while ((tuple = np_catalog_slot_getnext(scan, slot)) != NULL) {
         bool isnull;
         Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
         char *path = DatumGetCString(DirectFunctionCall1(ltree_out, ltree_datum));
@@ -1622,22 +1629,21 @@ drop_elabel(PG_FUNCTION_ARGS)
     }
 
     table_endscan(scan);
+    ExecDropSingleTupleTableSlot(slot);
     table_close(catalog_rel, RowExclusiveLock);
 
     /* 5. Remove the structural label from the Global Label Catalog, if present */
     char *cat_name = psprintf("np_label_catalog_%d", graph_id);
     Relation global_cat_rel = table_open(np_relation_id(cat_name, "table"), RowExclusiveLock);
 
-    NameData name_val;
-    namestrcpy(&name_val, label_str);
     ScanKeyData skey[2];
-    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_val));
+    ScanKeyInit(&skey[0], 1, BTEqualStrategyNumber, F_TEXTEQ, CStringGetTextDatum(label_str));
     ScanKeyInit(&skey[1], 2, BTEqualStrategyNumber, F_CHAREQ, CharGetDatum('s'));
 
     SysScanDesc global_cat_scan = systable_beginscan(global_cat_rel, InvalidOid, false, NULL, 2, skey);
     HeapTuple cat_tuple;
     while (HeapTupleIsValid(cat_tuple = systable_getnext(global_cat_scan))) {
-        CatalogTupleDelete(global_cat_rel, &cat_tuple->t_self);
+        np_catalog_delete(global_cat_rel, &cat_tuple->t_self);
     }
     systable_endscan(global_cat_scan);
     table_close(global_cat_rel, RowExclusiveLock);
@@ -1679,6 +1685,7 @@ rename_elabel(PG_FUNCTION_ARGS)
     const graph_cache_data *graph;
     Relation catalog_rel;
     TableScanDesc scan;
+    TupleTableSlot *slot;
     TupleDesc tupdesc;
     HeapTuple tuple;
     bool found_old = false;
@@ -1745,8 +1752,9 @@ rename_elabel(PG_FUNCTION_ARGS)
 
     catalog_rel = table_open(graph->edge_labels, RowExclusiveLock);
     tupdesc = RelationGetDescr(catalog_rel);
+    slot = table_slot_create(catalog_rel, NULL);
     scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
-    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    while ((tuple = np_catalog_slot_getnext(scan, slot)) != NULL)
     {
         bool isnull;
         Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
@@ -1765,19 +1773,21 @@ rename_elabel(PG_FUNCTION_ARGS)
 
     if (!found_old)
     {
+        ExecDropSingleTupleTableSlot(slot);
         table_close(catalog_rel, RowExclusiveLock);
         ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
                         errmsg("elabel \"%s\" does not exist", old_label)));
     }
     if (found_new)
     {
+        ExecDropSingleTupleTableSlot(slot);
         table_close(catalog_rel, RowExclusiveLock);
         ereport(ERROR, (errcode(ERRCODE_DUPLICATE_OBJECT),
                         errmsg("label \"%s\" already exists", new_label)));
     }
 
     scan = table_beginscan(catalog_rel, GetActiveSnapshot(), 0, NULL);
-    while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    while ((tuple = np_catalog_slot_getnext(scan, slot)) != NULL)
     {
         bool isnull;
         Datum ltree_datum = heap_getattr(tuple, 2, tupdesc, &isnull);
@@ -1840,6 +1850,7 @@ rename_elabel(PG_FUNCTION_ARGS)
         pfree(path);
     }
     table_endscan(scan);
+    ExecDropSingleTupleTableSlot(slot);
     table_close(catalog_rel, RowExclusiveLock);
 
     cat_name = psprintf("np_label_catalog_%d", (int) graph->id);
