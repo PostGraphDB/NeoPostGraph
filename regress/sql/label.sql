@@ -168,3 +168,23 @@ SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
 
 SELECT NeoPostGraph.rename_vlabel('match_test_graph', 'user', 'account', 'public');
 SELECT id, ltree, is_primary FROM neopostgraph.np_vertex_label_18 ORDER BY id;
+
+---
+--- rename_elabel: rewrite ltree tokens, including is_primary = false
+---
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'likes', 'appreciates', 'public');
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'appreciates', 'appreciates', 'public');
+SELECT NeoPostGraph.rename_elabel('label_graph', 'appreciates', 'knows', 'public');
+SELECT NeoPostGraph.rename_elabel('label_graph', 'missing_label', 'x', 'public');
+SELECT NeoPostGraph.rename_elabel('missing_graph', 'knows', 'x', 'public');
+SELECT NeoPostGraph.rename_elabel('label_graph', 'knows', 'has.dot', 'public');
+
+SELECT NeoPostGraph.drop_elabel('label_graph', 'reports_to');
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;
+
+SELECT NeoPostGraph.rename_elabel('label_graph', 'knows', 'acquainted', 'public');
+SELECT id, ltree, is_primary FROM neopostgraph.np_edge_label_16 ORDER BY id;

@@ -308,6 +308,11 @@ RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
 
+CREATE FUNCTION rename_elabel(graph_name Name, label text, new_label text, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';
+
 CREATE FUNCTION get_elabel_ids(graph_name name, labels text[], namespace_name text DEFAULT NULL)
 RETURNS SETOF int
 AS 'MODULE_PATHNAME', 'get_elabel_ids_by_path'
