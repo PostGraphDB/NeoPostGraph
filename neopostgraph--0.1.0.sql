@@ -459,3 +459,8 @@ CREATE FUNCTION rename_graph(graph_name Name, new_name Name, namespace text DEFA
 RETURNS void
 LANGUAGE c
 AS 'MODULE_PATHNAME';
+
+CREATE FUNCTION drop_graph(graph_name Name, namespace text DEFAULT NULL)
+RETURNS void
+LANGUAGE c
+AS 'MODULE_PATHNAME';

@@ -176,6 +176,26 @@ SELECT NeoPostGraph.rename_graph('renamed_graph', 'conflict_test', 'public');
 SELECT NeoPostGraph.rename_graph('no_such_graph', 'whatever', 'public');
 
 ---
+--- drop_graph: remove catalog row and all owned relations
+---
+SELECT NeoPostGraph.drop_graph('renamed_graph', 'public');
+SELECT name FROM NeoPostGraph.np_graph WHERE name = 'renamed_graph';
+SELECT to_regclass('neopostgraph.np_vertex_label_15');
+SELECT to_regclass('neopostgraph.np_edge_label_15');
+SELECT to_regclass('neopostgraph.np_label_catalog_15');
+SELECT to_regclass('public.vertex_label_id_seq_15');
+SELECT to_regclass('public.np_annotation_schema_15');
+SELECT to_regclass('public.np_vertex_15_1');
+SELECT to_regclass('neopostgraph.np_vertex_id_seq_15_1');
+SELECT to_regclass('neopostgraph.np_vertex_property_dictionary_15_1');
+
+-- already dropped
+SELECT NeoPostGraph.drop_graph('renamed_graph', 'public');
+
+-- missing graph
+SELECT NeoPostGraph.drop_graph('no_such_graph', 'public');
+
+---
 --- Verification
 ---
 SELECT * FROM NeoPostGraph.np_graph;

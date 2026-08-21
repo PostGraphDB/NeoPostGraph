@@ -22,6 +22,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
+#include "catalog/objectaddress.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_namespace.h"
 #include "commands/alter.h"
@@ -143,6 +144,15 @@ np_collect_regclass_col(Relation rel, HeapTuple tuple, AttrNumber attno, List **
 }
 
 static void
+np_append_named_rel(List **oids, const char *name, Oid nsp)
+{
+    Oid oid = get_relname_relid(name, nsp);
+
+    if (OidIsValid(oid))
+        *oids = lappend_oid(*oids, oid);
+}
+
+static void
 np_collect_linked_list_tables(Oid meta_oid, List **oids)
 {
     Relation meta_rel;
@@ -179,6 +189,7 @@ np_collect_graph_namespace_rels(const graph_cache_data *graph)
     {
         bool isnull;
         Oid ll_meta;
+        int32 label_id;
 
         /* tbl, phys_map, linked_list_meta, linked_list_seq, arraylist, annotations_tbl */
         np_collect_regclass_col(cat, tuple, 3, &oids);
@@ -191,6 +202,14 @@ np_collect_graph_namespace_rels(const graph_cache_data *graph)
         ll_meta = DatumGetObjectId(heap_getattr(tuple, 5, RelationGetDescr(cat), &isnull));
         if (!isnull && OidIsValid(ll_meta))
             np_collect_linked_list_tables(ll_meta, &oids);
+
+        label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(cat), &isnull));
+        if (!isnull)
+        {
+            np_append_named_rel(&oids, psprintf("np_vertex_id_seq_%d_%d", (int) graph->id, label_id), np_namespace_id());
+            np_append_named_rel(&oids, psprintf("np_vertex_property_dictionary_%d_%d", (int) graph->id, label_id), np_namespace_id());
+            np_append_named_rel(&oids, psprintf("np_vertex_property_dictionary_seq_%d_%d", (int) graph->id, label_id), np_namespace_id());
+        }
     }
     systable_endscan(scan);
     table_close(cat, AccessShareLock);
@@ -199,15 +218,43 @@ np_collect_graph_namespace_rels(const graph_cache_data *graph)
     scan = systable_beginscan(cat, InvalidOid, false, NULL, 0, NULL);
     while (HeapTupleIsValid(tuple = systable_getnext(scan)))
     {
+        bool isnull;
+        int32 label_id;
+
         /* tbl, phys_map, annotations_tbl */
         np_collect_regclass_col(cat, tuple, 3, &oids);
         np_collect_regclass_col(cat, tuple, 4, &oids);
         np_collect_regclass_col(cat, tuple, 5, &oids);
+
+        label_id = DatumGetInt32(heap_getattr(tuple, 1, RelationGetDescr(cat), &isnull));
+        if (!isnull)
+            np_append_named_rel(&oids, psprintf("np_edge_id_seq_%d_%d", (int) graph->id, label_id), np_namespace_id());
     }
     systable_endscan(scan);
     table_close(cat, AccessShareLock);
 
+    np_append_oid(&oids, ObjectIdGetDatum(graph->vertex_labels), false);
+    np_append_oid(&oids, ObjectIdGetDatum(graph->edge_labels), false);
+    np_append_named_rel(&oids, psprintf("np_label_catalog_%d", (int) graph->id), np_namespace_id());
+
     return oids;
+}
+
+static void
+np_drop_rel(Oid relid)
+{
+    ObjectAddress obj;
+
+    if (!OidIsValid(relid))
+        return;
+    if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+        return;
+
+    obj.classId = RelationRelationId;
+    obj.objectId = relid;
+    obj.objectSubId = 0;
+    performDeletion(&obj, DROP_CASCADE, PERFORM_DELETION_INTERNAL);
+    CommandCounterIncrement();
 }
 
 static void
@@ -437,5 +484,79 @@ rename_graph(PG_FUNCTION_ARGS)
 
     ereport(NOTICE, (errmsg("graph \"%s\" has been renamed to \"%s\"",
                             graph_name, new_name)));
+    PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(drop_graph);
+Datum
+drop_graph(PG_FUNCTION_ARGS)
+{
+    char *graph_name;
+    Oid nsp;
+    const graph_cache_data *graph;
+    List *oids;
+    ListCell *lc;
+    Relation np_graph;
+    ScanKeyData skey[2];
+    SysScanDesc scan;
+    HeapTuple old_tup;
+    NameData name_data;
+
+    if (PG_ARGISNULL(0))
+        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                        errmsg("graph name must not be NULL")));
+
+    graph_name = NameStr(*PG_GETARG_NAME(0));
+
+    if (PG_ARGISNULL(1))
+    {
+        List *search_path = fetch_search_path(false);
+        if (list_length(search_path) < 1)
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("drop_graph requires a search path when namespace is not specified")));
+        nsp = linitial_oid(search_path);
+    }
+    else
+    {
+        char *nsp_str = TextDatumGetCString(PG_GETARG_DATUM(1));
+        nsp = get_namespace_oid(nsp_str, true);
+        if (!OidIsValid(nsp))
+            ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                            errmsg("namespace \"%s\" does not exist", nsp_str)));
+    }
+
+    graph = search_graph_name_namespace_cache(graph_name, nsp);
+    if (!graph)
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" does not exist in the namespace \"%s\"",
+                               graph_name, get_namespace_name(nsp))));
+
+    oids = np_collect_graph_namespace_rels(graph);
+    foreach(lc, oids)
+        np_drop_rel(lfirst_oid(lc));
+    list_free(oids);
+
+    np_graph = table_open(np_graph_relation_id(), RowExclusiveLock);
+    namestrcpy(&name_data, graph_name);
+    ScanKeyInit(&skey[0], 2, BTEqualStrategyNumber, F_NAMEEQ, NameGetDatum(&name_data));
+    ScanKeyInit(&skey[1], 3, BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(nsp));
+    scan = systable_beginscan(np_graph, np_graph_name_namespace_index_id(), true, NULL, 2, skey);
+    old_tup = systable_getnext(scan);
+    if (!HeapTupleIsValid(old_tup))
+    {
+        systable_endscan(scan);
+        table_close(np_graph, RowExclusiveLock);
+        ereport(ERROR, (errcode(ERRCODE_UNDEFINED_SCHEMA),
+                        errmsg("graph \"%s\" catalog row not found", graph_name)));
+    }
+
+    CatalogTupleDelete(np_graph, &old_tup->t_self);
+    systable_endscan(scan);
+    table_close(np_graph, RowExclusiveLock);
+    CommandCounterIncrement();
+
+    invalidate_graph_name_namespace_cache_entry(graph_name, nsp);
+
+    ereport(NOTICE, (errmsg("graph \"%s\" has been dropped", graph_name)));
     PG_RETURN_VOID();
 }
