@@ -35,8 +35,8 @@ typedef struct {
     int16 dictionary_id;
     int32 start_label;
     int64 start_id;
-    int32 end_id;
-    int64 end_label;
+    int32 end_label;
+    int64 end_id;
 } edge;
 
 #define EDGEOID \
